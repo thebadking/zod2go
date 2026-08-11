@@ -1,0 +1,3 @@
+[submodule "vendor/zod"]
+	path = vendor/zod
+	url = git@github.com:colinhacks/zod.git

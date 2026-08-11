@@ -1,0 +1,76 @@
+{
+  "$zod2go": {
+    "version": 1,
+    "zodVersion": "4.4.3"
+  },
+  "schema": {
+    "type": "object",
+    "shape": {
+      "name": {
+        "type": "string",
+        "checks": [
+          {
+            "check": "min_length",
+            "value": 2
+          },
+          {
+            "check": "max_length",
+            "value": 100
+          }
+        ]
+      },
+      "email": {
+        "type": "string",
+        "format": "email"
+      },
+      "age": {
+        "type": "optional",
+        "inner": {
+          "type": "int",
+          "checks": [
+            {
+              "check": "number_format",
+              "format": "safeint"
+            },
+            {
+              "check": "greater_than",
+              "value": 0,
+              "inclusive": true
+            },
+            {
+              "check": "less_than",
+              "value": 150,
+              "inclusive": true
+            }
+          ]
+        }
+      },
+      "role": {
+        "type": "default",
+        "inner": {
+          "type": "enum",
+          "values": [
+            "admin",
+            "user"
+          ]
+        },
+        "default": "user"
+      },
+      "tags": {
+        "type": "optional",
+        "inner": {
+          "type": "array",
+          "element": {
+            "type": "string"
+          },
+          "checks": [
+            {
+              "check": "min_length",
+              "value": 1
+            }
+          ]
+        }
+      }
+    }
+  }
+}

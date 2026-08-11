@@ -1,0 +1,25 @@
+{
+  "name": "zod2go",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Use Zod schemas from TypeScript in Go with upstream compatibility",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "ts"
+  ],
+  "scripts": {
+    "dev": "vite --config ts/vite.config.ts",
+    "build": "npm run build -w @zod2go/export",
+    "export:example": "npm run build && node ts/dist/cli.js examples/schemas.ts UserSchema testdata/user.schema.json",
+    "test:ts": "npm run test -w @zod2go/export",
+    "test:go": "go test ./...",
+    "test": "npm run test:ts && npm run test:go",
+    "sync:zod": "git submodule update --remote vendor/zod"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0",
+    "zod": "4.4.3"
+  }
+}

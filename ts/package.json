@@ -1,0 +1,29 @@
+{
+  "name": "@zod2go/export",
+  "version": "0.1.0",
+  "description": "Export Zod v4 schemas to the zod2go IR format for Go validation",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "zod2go-export": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
+}
