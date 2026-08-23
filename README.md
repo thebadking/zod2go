@@ -105,9 +105,14 @@ The IR mirrors Zod v4 `$ZodTypeDef` nodes: `string`, `number`, `object`, `array`
 
 ## Development
 
+See [`specs/`](specs/) for agent guidelines, implementation tracker, and per-feature specs.
+
 ```bash
 # Dev server (Control Plane / Traefik)
 npm run dev -- --host 0.0.0.0 --port 4020
+
+# Regenerate IR fixtures from examples/schemas.ts
+npm run export:fixtures
 
 # Tests
 npm test          # TS + Go
@@ -122,7 +127,7 @@ The Go validation patterns and error ergonomics are informed by [aymaneallaoui/z
 ## Compatibility status
 
 - **Target:** Zod v4.4.x (see `vendor/zod`)
-- **Supported IR types:** string, number, int, boolean, null, array, object, enum, literal, union, optional, nullable, default, any/unknown
+- **Supported IR types:** string, number, int, boolean, null, array, object, enum, literal, union, optional, nullable, default, tuple, record, intersection, any/unknown
 - **Planned:** transforms, refinements, lazy/recursive schemas, full parity test suite against upstream Zod fixtures
 
 Contributions welcome — keep `vendor/zod` updated and extend the IR exporter + Go runtime together.

@@ -25,4 +25,28 @@ describe("exportSchema", () => {
     expect(doc.schema.element?.type).toBe("union");
     expect(doc.schema.element?.options).toHaveLength(2);
   });
+
+  it("exports tuple, record, and intersection", () => {
+    const S = z.object({
+      pair: z.tuple([z.string(), z.number()]),
+      scores: z.record(z.string(), z.number()),
+      merged: z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })),
+    });
+
+    const doc = exportSchema(S);
+    expect(doc.schema.shape?.pair.type).toBe("tuple");
+    expect(doc.schema.shape?.pair.items).toHaveLength(2);
+    expect(doc.schema.shape?.scores.type).toBe("record");
+    expect(doc.schema.shape?.scores.valueType?.type).toBe("number");
+    expect(doc.schema.shape?.merged.type).toBe("intersection");
+    expect(doc.schema.shape?.merged.left?.shape?.a.type).toBe("string");
+    expect(doc.schema.shape?.merged.right?.shape?.b.type).toBe("number");
+  });
+
+  it("exports array min_length checks from Zod v4", () => {
+    const S = z.array(z.string()).min(1);
+    const doc = exportSchema(S);
+    expect(doc.schema.checks?.[0]?.check).toBe("min_length");
+    expect(doc.schema.checks?.[0]?.value).toBe(1);
+  });
 });

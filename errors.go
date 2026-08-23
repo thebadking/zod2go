@@ -184,6 +184,12 @@ func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
 		return v.runUndefined(input, path)
 	case "array":
 		return v.runArray(input, schema, path)
+	case "tuple":
+		return v.runTuple(input, schema, path)
+	case "record":
+		return v.runRecord(input, schema, path)
+	case "intersection":
+		return v.runIntersection(input, schema, path)
 	case "object":
 		return v.runObject(input, schema, path)
 	case "enum":

@@ -12,8 +12,10 @@
     "dev": "vite --config ts/vite.config.ts",
     "build": "npm run build -w @zod2go/export",
     "export:example": "npm run build && node ts/dist/cli.js examples/schemas.ts UserSchema testdata/user.schema.json",
+    "export:extended": "npm run build && node ts/dist/cli.js examples/schemas.ts ExtendedSchema testdata/extended.schema.json",
+    "export:fixtures": "npm run export:example && npm run export:extended",
     "test:ts": "npm run test -w @zod2go/export",
-    "test:go": "go test ./...",
+    "test:go": "PATH=\"/usr/local/go/bin:$HOME/go/bin:$PATH\" GOTOOLCHAIN=go1.23.6 go test ./...",
     "test": "npm run test:ts && npm run test:go",
     "sync:zod": "git submodule update --remote vendor/zod"
   },

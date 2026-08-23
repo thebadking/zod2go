@@ -6,7 +6,13 @@ export interface IRSchema {
   coerce?: boolean;
   checks?: IRCheck[];
   element?: IRSchema;
+  items?: IRSchema[];
+  rest?: IRSchema;
   shape?: Record<string, IRSchema>;
+  keyType?: IRSchema;
+  valueType?: IRSchema;
+  left?: IRSchema;
+  right?: IRSchema;
   options?: IRSchema[];
   values?: unknown[];
   value?: unknown;
@@ -98,6 +104,24 @@ function serializeSchema(schema: AnySchema, seen: WeakMap<object, IRSchema>): IR
     case "array":
       ir.element = serializeSchema(def.element as AnySchema, seen);
       ir.checks = serializeChecks(def.checks);
+      break;
+
+    case "tuple": {
+      const items = def.items as AnySchema[];
+      ir.items = items.map((s) => serializeSchema(s, seen));
+      if (def.rest) ir.rest = serializeSchema(def.rest as AnySchema, seen);
+      ir.checks = serializeChecks(def.checks);
+      break;
+    }
+
+    case "record":
+      if (def.keyType) ir.keyType = serializeSchema(def.keyType as AnySchema, seen);
+      ir.valueType = serializeSchema(def.valueType as AnySchema, seen);
+      break;
+
+    case "intersection":
+      ir.left = serializeSchema(def.left as AnySchema, seen);
+      ir.right = serializeSchema(def.right as AnySchema, seen);
       break;
 
     case "object": {

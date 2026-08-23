@@ -8,5 +8,10 @@ export default defineConfig({
     port: 4020,
     allowedHosts: ["a4100b3d.naori.cloud"],
   },
+  resolve: {
+    alias: {
+      "@zod2go/export": path.resolve(import.meta.dirname, "src/index.ts"),
+    },
+  },
   publicDir: false,
 });

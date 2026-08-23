@@ -379,23 +379,150 @@ func (v *Validator) runDefault(input any, schema Schema, path []any) ([]Issue, a
 
 func checkSize(n int, chk Check, origin string, path []any) *Issue {
 	switch chk.Check {
-	case "min_size":
-		min := intFromAny(chk.Value)
+	case "min_size", "min_length":
+		min := intFromCheck(chk, true)
 		if n < min {
 			return &Issue{Code: "too_small", Origin: origin, Minimum: min, Inclusive: true, Path: path}
 		}
-	case "max_size":
-		max := intFromAny(chk.Value)
+	case "max_size", "max_length":
+		max := intFromCheck(chk, false)
 		if n > max {
 			return &Issue{Code: "too_big", Origin: origin, Maximum: max, Inclusive: true, Path: path}
 		}
-	case "size_equals":
-		eq := intFromAny(chk.Value)
+	case "size_equals", "length_equals":
+		eq := intFromCheck(chk, true)
 		if n != eq {
 			return &Issue{Code: "too_small", Origin: origin, Minimum: eq, Exact: true, Path: path}
 		}
 	}
 	return nil
+}
+
+func intFromCheck(chk Check, preferMin bool) int {
+	if chk.Value != nil {
+		return intFromAny(chk.Value)
+	}
+	if preferMin && chk.Minimum != nil {
+		return intFromAny(chk.Minimum)
+	}
+	if !preferMin && chk.Maximum != nil {
+		return intFromAny(chk.Maximum)
+	}
+	return 0
+}
+
+func (v *Validator) runTuple(input any, schema Schema, path []any) ([]Issue, any) {
+	arr, ok := input.([]any)
+	if !ok {
+		return []Issue{{
+			Code: "invalid_type", Expected: "array", Path: path, Input: input,
+			Message: "Invalid input: expected tuple (array), received " + typeName(input),
+		}}, nil
+	}
+	for _, chk := range schema.Checks {
+		if iss := checkSize(len(arr), chk, "array", path); iss != nil {
+			return []Issue{*iss}, nil
+		}
+	}
+	if len(schema.Items) > 0 && len(arr) < len(schema.Items) {
+		return []Issue{{
+			Code: "too_small", Origin: "array", Minimum: len(schema.Items), Inclusive: true, Path: path, Input: input,
+			Message: fmt.Sprintf("Too small: expected array to have >=%d items", len(schema.Items)),
+		}}, nil
+	}
+	out := make([]any, len(arr))
+	var issues []Issue
+	for i, item := range arr {
+		if i >= len(schema.Items) {
+			if schema.Rest != nil {
+				res := v.safeParse(item, *schema.Rest, prefixPath(path, float64(i)))
+				if !res.Success {
+					issues = append(issues, res.Error.Issues...)
+				} else {
+					out[i] = res.Data
+				}
+			}
+			continue
+		}
+		res := v.safeParse(item, schema.Items[i], prefixPath(path, float64(i)))
+		if !res.Success {
+			issues = append(issues, res.Error.Issues...)
+		} else {
+			out[i] = res.Data
+		}
+	}
+	if len(issues) > 0 {
+		return issues, nil
+	}
+	return nil, out
+}
+
+func (v *Validator) runRecord(input any, schema Schema, path []any) ([]Issue, any) {
+	obj, ok := input.(map[string]any)
+	if !ok {
+		return []Issue{{
+			Code: "invalid_type", Expected: "object", Path: path, Input: input,
+			Message: "Invalid input: expected object, received " + typeName(input),
+		}}, nil
+	}
+	if schema.ValueType == nil {
+		return nil, obj
+	}
+	out := make(map[string]any)
+	var issues []Issue
+	for k, val := range obj {
+		if schema.KeyType != nil {
+			res := v.safeParse(k, *schema.KeyType, prefixPath(path, k))
+			if !res.Success {
+				issues = append(issues, res.Error.Issues...)
+				continue
+			}
+		}
+		res := v.safeParse(val, *schema.ValueType, prefixPath(path, k))
+		if !res.Success {
+			issues = append(issues, res.Error.Issues...)
+		} else {
+			out[k] = res.Data
+		}
+	}
+	if len(issues) > 0 {
+		return issues, nil
+	}
+	return nil, out
+}
+
+func (v *Validator) runIntersection(input any, schema Schema, path []any) ([]Issue, any) {
+	if schema.Left == nil || schema.Right == nil {
+		return nil, input
+	}
+	leftIssues, leftOut := v.run(input, *schema.Left, path)
+	if len(leftIssues) > 0 {
+		return leftIssues, nil
+	}
+	rightIssues, rightOut := v.run(input, *schema.Right, path)
+	if len(rightIssues) > 0 {
+		return rightIssues, nil
+	}
+	return nil, mergeOutputs(leftOut, rightOut)
+}
+
+func mergeOutputs(a, b any) any {
+	am, aok := a.(map[string]any)
+	bm, bok := b.(map[string]any)
+	if aok && bok {
+		out := make(map[string]any, len(am)+len(bm))
+		for k, v := range am {
+			out[k] = v
+		}
+		for k, v := range bm {
+			out[k] = v
+		}
+		return out
+	}
+	if b != nil {
+		return b
+	}
+	return a
 }
 
 type jsonNumber interface {

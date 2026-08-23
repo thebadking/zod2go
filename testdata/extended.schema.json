@@ -1,0 +1,63 @@
+{
+  "$zod2go": {
+    "version": 1,
+    "zodVersion": "4.4.3"
+  },
+  "schema": {
+    "type": "object",
+    "shape": {
+      "pair": {
+        "type": "tuple",
+        "items": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          }
+        ]
+      },
+      "scores": {
+        "type": "record",
+        "keyType": {
+          "type": "string"
+        },
+        "valueType": {
+          "type": "number"
+        }
+      },
+      "merged": {
+        "type": "intersection",
+        "left": {
+          "type": "object",
+          "shape": {
+            "a": {
+              "type": "string"
+            }
+          }
+        },
+        "right": {
+          "type": "object",
+          "shape": {
+            "b": {
+              "type": "number"
+            }
+          }
+        }
+      },
+      "tags": {
+        "type": "array",
+        "element": {
+          "type": "string"
+        },
+        "checks": [
+          {
+            "check": "min_length",
+            "value": 1
+          }
+        ]
+      }
+    },
+    "strict": true
+  }
+}

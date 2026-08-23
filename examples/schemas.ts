@@ -14,5 +14,15 @@ export const PostSchema = z.object({
   published: z.boolean().default(false),
 });
 
+export const ExtendedSchema = z
+  .object({
+    pair: z.tuple([z.string(), z.number()]),
+    scores: z.record(z.string(), z.number()),
+    merged: z.intersection(z.object({ a: z.string() }), z.object({ b: z.number() })),
+    tags: z.array(z.string()).min(1),
+  })
+  .strict();
+
 export type User = z.infer<typeof UserSchema>;
 export type Post = z.infer<typeof PostSchema>;
+export type Extended = z.infer<typeof ExtendedSchema>;

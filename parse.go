@@ -17,21 +17,27 @@ type Document struct {
 
 // Schema is the portable Zod schema intermediate representation.
 type Schema struct {
-	Type     string          `json:"type"`
-	Coerce   bool            `json:"coerce,omitempty"`
-	Checks   []Check         `json:"checks,omitempty"`
-	Element  *Schema         `json:"element,omitempty"`
-	Shape    map[string]Schema `json:"shape,omitempty"`
-	Options  []Schema        `json:"options,omitempty"`
-	Values   []any           `json:"values,omitempty"`
-	Value    any             `json:"value,omitempty"`
-	Inner    *Schema         `json:"inner,omitempty"`
-	Catchall *Schema         `json:"catchall,omitempty"`
-	Default  any             `json:"default,omitempty"`
-	Format   string          `json:"format,omitempty"`
-	Pattern  string          `json:"pattern,omitempty"`
-	UUIDVer  *int            `json:"uuidVersion,omitempty"`
-	Strict   bool            `json:"strict,omitempty"`
+	Type      string            `json:"type"`
+	Coerce    bool              `json:"coerce,omitempty"`
+	Checks    []Check           `json:"checks,omitempty"`
+	Element   *Schema           `json:"element,omitempty"`
+	Items     []Schema          `json:"items,omitempty"`
+	Rest      *Schema           `json:"rest,omitempty"`
+	Shape     map[string]Schema `json:"shape,omitempty"`
+	KeyType   *Schema           `json:"keyType,omitempty"`
+	ValueType *Schema           `json:"valueType,omitempty"`
+	Left      *Schema           `json:"left,omitempty"`
+	Right     *Schema           `json:"right,omitempty"`
+	Options   []Schema          `json:"options,omitempty"`
+	Values    []any             `json:"values,omitempty"`
+	Value     any               `json:"value,omitempty"`
+	Inner     *Schema           `json:"inner,omitempty"`
+	Catchall  *Schema           `json:"catchall,omitempty"`
+	Default   any               `json:"default,omitempty"`
+	Format    string            `json:"format,omitempty"`
+	Pattern   string            `json:"pattern,omitempty"`
+	UUIDVer   *int              `json:"uuidVersion,omitempty"`
+	Strict    bool              `json:"strict,omitempty"`
 }
 
 // Check mirrors Zod v4 $ZodCheckDef entries.
