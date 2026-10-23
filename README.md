@@ -127,7 +127,8 @@ The Go validation patterns and error ergonomics are informed by [aymaneallaoui/z
 ## Compatibility status
 
 - **Target:** Zod v4.4.x (see `vendor/zod`)
-- **Supported IR types:** string, number, int, boolean, null, array, object, enum, literal, union, optional, nullable, default, tuple, record, intersection, any/unknown
-- **Planned:** transforms, refinements, lazy/recursive schemas, full parity test suite against upstream Zod fixtures
+- **Supported IR types:** string, number, int, boolean, null, date, array, set, map, object, enum, literal, union, optional, nullable, default, tuple, record, intersection, any/unknown, lazy/recursive (`$ref` + definitions)
+- **Refinements/transforms:** base schema validated; custom predicates and transform functions are skipped (cannot be serialized to IR)
+- **Remaining:** exhaustive upstream Zod fixture parity
 
 Contributions welcome — keep `vendor/zod` updated and extend the IR exporter + Go runtime together.

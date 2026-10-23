@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (v *Validator) runString(input any, schema Schema, path []any) ([]Issue, any) {
@@ -155,6 +156,90 @@ func checkNumber(n float64, chk Check, path []any) *Issue {
 	case "number_format":
 		// Exported metadata; int typing handled at schema level.
 		return nil
+	}
+	return nil
+}
+
+// runDate validates ISO 8601 date/datetime strings (JSON representation of JS Date).
+func (v *Validator) runDate(input any, schema Schema, path []any) ([]Issue, any) {
+	s, ok := input.(string)
+	if !ok {
+		return []Issue{{
+			Code: "invalid_type", Expected: "date", Path: path, Input: input,
+			Message: "Invalid input: expected ISO date string, received " + typeName(input),
+		}}, nil
+	}
+	formats := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02",
+	}
+	var t time.Time
+	var parsed bool
+	for _, f := range formats {
+		if pt, err := time.Parse(f, s); err == nil {
+			t = pt
+			parsed = true
+			break
+		}
+	}
+	if !parsed {
+		return []Issue{{
+			Code: "invalid_format", Format: "date", Path: path, Input: s,
+			Message: "Invalid date: expected ISO 8601 date string",
+		}}, nil
+	}
+	for _, chk := range schema.Checks {
+		if iss := checkDate(t, chk, path, s); iss != nil {
+			return []Issue{*iss}, nil
+		}
+	}
+	return nil, s
+}
+
+func checkDate(t time.Time, chk Check, path []any, input string) *Issue {
+	parseDate := func(v any) (time.Time, bool) {
+		s, ok := v.(string)
+		if !ok {
+			return time.Time{}, false
+		}
+		for _, f := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.000Z", "2006-01-02"} {
+			if pt, err := time.Parse(f, s); err == nil {
+				return pt, true
+			}
+		}
+		return time.Time{}, false
+	}
+	switch chk.Check {
+	case "greater_than":
+		ref, ok := parseDate(chk.Value)
+		if !ok {
+			return nil
+		}
+		if chk.Inclusive {
+			if t.Before(ref) {
+				return &Issue{Code: "too_small", Origin: "date", Path: path, Input: input,
+					Message: "Date too early"}
+			}
+		} else if !t.After(ref) {
+			return &Issue{Code: "too_small", Origin: "date", Path: path, Input: input,
+				Message: "Date too early"}
+		}
+	case "less_than":
+		ref, ok := parseDate(chk.Value)
+		if !ok {
+			return nil
+		}
+		if chk.Inclusive {
+			if t.After(ref) {
+				return &Issue{Code: "too_big", Origin: "date", Path: path, Input: input,
+					Message: "Date too late"}
+			}
+		} else if !t.Before(ref) {
+			return &Issue{Code: "too_big", Origin: "date", Path: path, Input: input,
+				Message: "Date too late"}
+		}
 	}
 	return nil
 }

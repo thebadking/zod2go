@@ -23,7 +23,7 @@
 | 04   | Cross-runtime parity       | `done` | [`04-cross-runtime-parity.md`](./04-cross-runtime-parity.md) |
 | 05   | Export pipeline            | `done` | [`05-export-pipeline.md`](./05-export-pipeline.md) |
 
-All defined specs fulfilled. Future work (transforms, refinements, lazy schemas) is documented as out of scope in [`GUIDELINES.md`](./GUIDELINES.md).
+All defined specs fulfilled. Former "out of scope" items (transforms, refinements, lazy/recursive schemas) are now implemented — see iteration 2 changelog below.
 
 ---
 
@@ -94,3 +94,4 @@ All defined specs fulfilled. Future work (transforms, refinements, lazy schemas)
 | Date       | Agent       | Change |
 | ---------- | ----------- | ------ |
 | 2026-08-23 | agent-ipqj  | Created specs/; implemented extended IR, strict/checks, demo, parity, export pipeline; all tests pass |
+| 2026-10-23 | sonnet-4-6  | Iteration 2: lazy/recursive schemas ($ref + definitions), date type, set/map types, skip custom checks (refinement pass-through), literal fix for Zod v4 values array, expanded parity suite (97 TS tests, 19 Go tests) |

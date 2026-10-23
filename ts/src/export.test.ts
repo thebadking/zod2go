@@ -49,4 +49,67 @@ describe("exportSchema", () => {
     expect(doc.schema.checks?.[0]?.check).toBe("min_length");
     expect(doc.schema.checks?.[0]?.value).toBe(1);
   });
+
+  it("exports date type", () => {
+    const S = z.date();
+    const doc = exportSchema(S);
+    expect(doc.schema.type).toBe("date");
+  });
+
+  it("exports set as set type with element", () => {
+    const S = z.set(z.string());
+    const doc = exportSchema(S);
+    expect(doc.schema.type).toBe("set");
+    expect(doc.schema.element?.type).toBe("string");
+  });
+
+  it("exports map as map type with keyType and valueType", () => {
+    const S = z.map(z.string(), z.number());
+    const doc = exportSchema(S);
+    expect(doc.schema.type).toBe("map");
+    expect(doc.schema.keyType?.type).toBe("string");
+    expect(doc.schema.valueType?.type).toBe("number");
+  });
+
+  it("exports lazy recursive schema with $ref and definitions", () => {
+    type Tree = { val: number; children: Tree[] };
+    const TreeSchema: z.ZodType<Tree> = z.lazy(() =>
+      z.object({ val: z.number(), children: z.array(TreeSchema) })
+    );
+    const doc = exportSchema(TreeSchema);
+    // Top-level schema is a $ref
+    expect(doc.schema.type).toBe("$ref");
+    expect(doc.schema["$ref"]).toBeTruthy();
+    // definitions contains the actual object schema
+    expect(doc.definitions).toBeDefined();
+    const defName = doc.schema["$ref"]!;
+    expect(doc.definitions![defName].type).toBe("object");
+    // children element is a $ref back to the same def
+    const childrenEl = doc.definitions![defName].shape?.children.element;
+    expect(childrenEl?.type).toBe("$ref");
+    expect(childrenEl?.["$ref"]).toBe(defName);
+  });
+
+  it("exports refinements as pass-through (skips custom checks)", () => {
+    const S = z.string().min(3).refine((s) => s.includes("@"), "must contain @");
+    const doc = exportSchema(S);
+    // Should be a string with min_length check but no custom check
+    expect(doc.schema.type).toBe("string");
+    const checks = doc.schema.checks ?? [];
+    expect(checks.some((c) => c.check === "custom")).toBe(false);
+    expect(checks.some((c) => c.check === "min_length")).toBe(true);
+  });
+
+  it("exports transforms as input schema (pipe pass-through)", () => {
+    const S = z.string().transform((s) => s.toUpperCase());
+    const doc = exportSchema(S);
+    expect(doc.schema.type).toBe("string");
+  });
+
+  it("exports coerced number", () => {
+    const S = z.coerce.number();
+    const doc = exportSchema(S);
+    expect(doc.schema.type).toBe("number");
+    expect(doc.schema.coerce).toBe(true);
+  });
 });

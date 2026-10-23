@@ -12,12 +12,14 @@ type Document struct {
 		Version    int    `json:"version"`
 		ZodVersion string `json:"zodVersion"`
 	} `json:"$zod2go"`
-	Schema Schema `json:"schema"`
+	Definitions map[string]Schema `json:"definitions,omitempty"`
+	Schema      Schema            `json:"schema"`
 }
 
 // Schema is the portable Zod schema intermediate representation.
 type Schema struct {
 	Type      string            `json:"type"`
+	Ref       string            `json:"$ref,omitempty"`
 	Coerce    bool              `json:"coerce,omitempty"`
 	Checks    []Check           `json:"checks,omitempty"`
 	Element   *Schema           `json:"element,omitempty"`

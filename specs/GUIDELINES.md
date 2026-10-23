@@ -41,7 +41,14 @@ Skip exhaustive combinatorics; focus on representative cases per IR type.
 
 The host Go 1.24 install may be broken. Tests use `GOTOOLCHAIN=go1.23.6` (see `package.json` scripts).
 
-## Out of scope (document, do not implement yet)
+## Implemented (formerly out of scope)
 
-- **Transforms / refinements / lazy:** runtime-only in Zod; exporter falls back to `unknown`.
-- **Full upstream Zod fixture port:** future work once core IR is stable.
+- **Transforms:** `.transform()` is a pipe; exporter uses input schema (pre-transform). ✅
+- **Refinements:** `.refine()` attaches a `custom` check; exporter skips it and validates the base schema. ✅
+- **Lazy/recursive schemas:** exported as `$ref` nodes with a `definitions` map in the document; Go runtime resolves refs at validation time. ✅
+- **Date type:** exported as `{"type":"date"}`; Go validates ISO 8601 strings. ✅
+- **Set/Map types:** exported as `set`/`map` IR types; Go validates element/value types. ✅
+
+## Remaining out of scope
+
+- **Full upstream Zod test fixture port:** exhaustive combinatoric coverage against every upstream Zod test case; representative parity is in place.

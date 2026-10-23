@@ -127,11 +127,12 @@ type SafeResult struct {
 // Validator validates values against an exported Zod schema.
 type Validator struct {
 	schema Schema
+	defs   map[string]Schema
 }
 
 // NewValidator creates a validator from a schema document.
 func NewValidator(doc *Document) *Validator {
-	return &Validator{schema: doc.Schema}
+	return &Validator{schema: doc.Schema, defs: doc.Definitions}
 }
 
 // NewValidatorFromSchema creates a validator from a schema node.
@@ -170,7 +171,22 @@ func (v *Validator) safeParse(input any, schema Schema, path []any) SafeResult {
 	return SafeResult{Success: true, Data: out}
 }
 
+func (v *Validator) resolveRef(schema Schema) (Schema, bool) {
+	if schema.Ref == "" {
+		return schema, false
+	}
+	if v.defs != nil {
+		if def, ok := v.defs[schema.Ref]; ok {
+			return def, true
+		}
+	}
+	return schema, false
+}
+
 func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
+	if resolved, ok := v.resolveRef(schema); ok {
+		schema = resolved
+	}
 	switch schema.Type {
 	case "string":
 		return v.runString(input, schema, path)
@@ -178,15 +194,17 @@ func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
 		return v.runNumber(input, schema, path)
 	case "boolean":
 		return v.runBoolean(input, schema, path)
+	case "date":
+		return v.runDate(input, schema, path)
 	case "null":
 		return v.runNull(input, path)
 	case "undefined", "void":
 		return v.runUndefined(input, path)
-	case "array":
+	case "array", "set":
 		return v.runArray(input, schema, path)
 	case "tuple":
 		return v.runTuple(input, schema, path)
-	case "record":
+	case "record", "map":
 		return v.runRecord(input, schema, path)
 	case "intersection":
 		return v.runIntersection(input, schema, path)
