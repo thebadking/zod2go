@@ -1,10 +1,11 @@
-import type { z } from "zod";
+import { z } from "zod";
 
 /** Portable schema node matching the Go zod2go.Schema struct. */
 export interface IRSchema {
   type: string;
   $ref?: string;
   coerce?: boolean;
+  optionalInput?: boolean;
   checks?: IRCheck[];
   element?: IRSchema;
   items?: IRSchema[];
@@ -57,6 +58,8 @@ interface ExportContext {
   lazyNames: WeakMap<object, string>;
   /** Named definitions accumulated during serialization. */
   definitions: Map<string, IRSchema>;
+  active: WeakSet<object>;
+  recursiveNames: WeakMap<object, string>;
   counter: number;
 }
 
@@ -67,6 +70,8 @@ export function exportSchema(schema: AnySchema): IRDocument {
     processing: new WeakMap(),
     lazyNames: new WeakMap(),
     definitions: new Map(),
+    active: new WeakSet(),
+    recursiveNames: new WeakMap(),
     counter: 0,
   };
 
@@ -93,12 +98,8 @@ export function exportSchemaJSON(schema: AnySchema, space = 2): string {
 }
 
 function readZodVersion(): string {
-  try {
-    const pkg = require("zod/package.json") as { version?: string };
-    return pkg.version ?? "4.x";
-  } catch {
-    return "4.4.3";
-  }
+  const version = z.core.version;
+  return `${version.major}.${version.minor}.${version.patch}`;
 }
 
 function serializeLazy(lazy: AnySchema, def: Record<string, unknown>, ctx: ExportContext): IRSchema {
@@ -113,7 +114,7 @@ function serializeLazy(lazy: AnySchema, def: Record<string, unknown>, ctx: Expor
   // First encounter: assign a name, call getter ONCE, serialize inner.
   const name = `def_${ctx.counter++}`;
   ctx.processing.set(lazy, name);
-  const inner = (def.getter as () => AnySchema)();
+  const inner = (lazy._zod as unknown as { innerType: AnySchema }).innerType;
   const ir = serializeSchema(inner, ctx);
   ctx.processing.delete(lazy);
   ctx.definitions.set(name, ir);
@@ -123,6 +124,15 @@ function serializeLazy(lazy: AnySchema, def: Record<string, unknown>, ctx: Expor
 
 function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
   if (ctx.seen.has(schema)) {
+    if (ctx.active.has(schema)) {
+      let name = ctx.recursiveNames.get(schema);
+      if (!name) {
+        name = `def_${ctx.counter++}`;
+        ctx.recursiveNames.set(schema, name);
+        ctx.definitions.set(name, ctx.seen.get(schema)!);
+      }
+      return { type: "$ref", $ref: name };
+    }
     return ctx.seen.get(schema)!;
   }
 
@@ -133,11 +143,15 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
   // Key on the lazy schema object itself, NOT the inner result
   // (getter creates a new object each call, so inner identity is unstable).
   if (type === "lazy") {
-    return serializeLazy(schema, def, ctx);
+    const ref = serializeLazy(schema, def, ctx);
+    if (schema._zod.optin === "optional") ref.optionalInput = true;
+    return ref;
   }
 
   const ir: IRSchema = { type };
+  if (schema._zod.optin === "optional") ir.optionalInput = true;
   ctx.seen.set(schema, ir);
+  ctx.active.add(schema);
 
   if (def.coerce === true) ir.coerce = true;
 
@@ -146,13 +160,13 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
       ir.checks = serializeChecks(def.checks);
       if (typeof def.format === "string") ir.format = def.format;
       if (typeof def.pattern === "string") ir.pattern = def.pattern;
+      if (typeof def.version === "string" && /^v[1-8]$/.test(def.version)) ir.uuidVersion = Number(def.version.slice(1));
       break;
 
     case "number":
     case "int":
     case "boolean":
-    case "bigint":
-      ir.checks = serializeChecks(def.checks);
+      ir.checks = serializeChecks([...(Array.isArray(def.checks) ? def.checks : []), ...(def.check ? [schema] : [])]);
       if (type === "number" && hasIntFormat(ir.checks)) {
         ir.type = "int";
       }
@@ -201,9 +215,9 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
 
     case "object": {
       const shape = def.shape as Record<string, AnySchema>;
-      ir.shape = {};
+      ir.shape = Object.create(null);
       for (const [k, v] of Object.entries(shape)) {
-        ir.shape[k] = serializeSchema(v, ctx);
+        ir.shape![k] = serializeSchema(v, ctx);
       }
       if (def.catchall) ir.catchall = serializeSchema(def.catchall as AnySchema, ctx);
       if (def.catchall && (def.catchall as AnySchema).def?.type === "never") {
@@ -214,11 +228,14 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
     }
 
     case "enum": {
-      const entries = def.entries as Record<string, string> | [string, ...string[]];
+      const entries = def.entries as Record<string, string | number> | [string, ...string[]];
       if (Array.isArray(entries)) {
         ir.values = [...entries];
       } else {
-        ir.values = Object.values(entries);
+        const numericValues = new Set(Object.values(entries).filter((v) => typeof v === "number"));
+        ir.values = Object.entries(entries)
+          .filter(([key]) => !numericValues.has(Number(key)))
+          .map(([, value]) => value);
       }
       break;
     }
@@ -246,30 +263,42 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
     case "nullable":
     case "nonoptional":
     case "readonly":
-    case "catch":
-    case "prefault":
       ir.type = type === "nonoptional" ? "nonoptional" : type;
       ir.inner = serializeSchema(innerSchema(def), ctx);
       break;
 
-    case "default":
+    case "prefault":
+    case "default": {
       ir.inner = serializeSchema(innerSchema(def), ctx);
-      ir.default = typeof def.defaultValue === "function" ? (def.defaultValue as () => unknown)() : def.defaultValue;
+      const value = def.defaultValue;
+      ir.default = jsonValue(typeof value === "function" ? (value as () => unknown)() : value);
       break;
+    }
 
     case "pipe":
       // Use the input (pre-transform) schema; covers .transform() and .refine().
-      return serializeSchema(def.in as AnySchema, ctx);
+      Object.assign(ir, serializeSchema(def.in as AnySchema, ctx));
+      break;
 
     case "transform":
     case "custom":
       // Runtime-only; fall back to unknown.
-      return { type: "unknown" };
+      ir.type = "unknown";
+      break;
+
+    case "any":
+    case "unknown":
+    case "null":
+    case "undefined":
+    case "void":
+    case "never":
+      break;
 
     default:
-      break;
+      throw new Error(`Unsupported schema type: ${type}`);
   }
 
+  ctx.active.delete(schema);
   return ir;
 }
 
@@ -296,11 +325,30 @@ function serializeChecks(checks: unknown): IRCheck[] | undefined {
     if (def.maximum !== undefined) ir.value = def.maximum;
     if (def.inclusive !== undefined) ir.inclusive = def.inclusive as boolean;
     if (def.format !== undefined) ir.format = def.format as string;
-    if (def.pattern !== undefined) ir.pattern = String(def.pattern);
-    if (def.version !== undefined) ir.value = def.version;
+    if (def.pattern instanceof RegExp) {
+      if (/[^imsu]/.test(def.pattern.flags)) {
+        throw new Error(`Unsupported regex flags: ${def.pattern.flags}`);
+      }
+      const flags = def.pattern.flags.replace(/u/g, "");
+      ir.pattern = (flags ? `(?${flags})` : "") + def.pattern.source;
+    } else if (def.pattern !== undefined) ir.pattern = String(def.pattern);
+    if (typeof def.version === "string" && /^v[1-8]$/.test(def.version)) ir.value = Number(def.version.slice(1));
     out.push(ir);
   }
   return out.length ? out : undefined;
 }
 
 export { serializeSchema };
+
+
+function jsonValue(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Set) return [...value].map(jsonValue);
+  if (value instanceof Map) {
+    if ([...value.keys()].some(key => typeof key !== "string")) throw new Error("Map defaults require string keys");
+    return Object.fromEntries([...value].map(([key, val]) => [key, jsonValue(val)]));
+  }
+  if (Array.isArray(value)) return value.map(jsonValue);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, jsonValue(val)]));
+  return value;
+}

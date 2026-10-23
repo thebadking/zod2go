@@ -36,9 +36,11 @@ npm run sync:zod
 # or: ./scripts/sync-zod.sh
 ```
 
-The TypeScript exporter (`@zod2go/export`) depends on this submodule so schema serialization tracks Zod v4 internals.
+The TypeScript exporter (`@zod2go/export`) uses the pinned npm dependency `zod@4.4.3`. The submodule provides the matching upstream source for reference and compatibility work.
 
 ## Quick start
+
+The export CLI loads TypeScript schemas through its `tsx` runtime dependency.
 
 ### 1. Define schemas in TypeScript
 
@@ -117,7 +119,7 @@ npm run export:fixtures
 # Tests
 npm test          # TS + Go
 go test ./...
-npm run test:ts -w @zod2go/export
+npm run test:ts
 ```
 
 ## Inspiration
@@ -129,6 +131,11 @@ The Go validation patterns and error ergonomics are informed by [aymaneallaoui/z
 - **Target:** Zod v4.4.x (see `vendor/zod`)
 - **Supported IR types:** string, number, int, boolean, null, date, array, set, map, object, enum, literal, union, optional, nullable, default, tuple, record, intersection, any/unknown, lazy/recursive (`$ref` + definitions)
 - **Refinements/transforms:** base schema validated; custom predicates and transform functions are skipped (cannot be serialized to IR)
+- **Additional wrappers:** readonly, nonoptional, prefault; unsupported schema types (including bigint and catch) fail explicitly during export.
+- **JSON representation:** dates use ISO date/datetime strings, sets use arrays, and maps use objects with string keys. Set uniqueness is not enforced. These wire forms differ from Zod's native Date/Set/Map inputs.
+- **Missing values:** absent object fields are distinct from explicit JSON null. Go callers can use `zod2go.Undefined` for a top-level missing value.
+- **Regex:** Go RE2 syntax; `i`, `m`, and `s` flags are supported. Unsupported flags fail export; patterns RE2 cannot compile fail validation. Named string formats use the subset in `regexes.go`.
+- **Defaults:** values are captured at export time; default functions do not run in Go.
 - **Remaining:** exhaustive upstream Zod fixture parity
 
 Contributions welcome — keep `vendor/zod` updated and extend the IR exporter + Go runtime together.

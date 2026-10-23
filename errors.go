@@ -8,20 +8,20 @@ import (
 
 // Issue mirrors Zod v4 $ZodIssueBase and common subtypes.
 type Issue struct {
-	Code     string `json:"code"`
-	Message  string `json:"message"`
-	Path     []any  `json:"path"`
-	Input    any    `json:"input,omitempty"`
-	Expected string `json:"expected,omitempty"`
-	Origin   string `json:"origin,omitempty"`
-	Minimum  any    `json:"minimum,omitempty"`
-	Maximum  any    `json:"maximum,omitempty"`
-	Inclusive bool  `json:"inclusive,omitempty"`
-	Exact    bool   `json:"exact,omitempty"`
-	Format   string `json:"format,omitempty"`
-	Pattern  string `json:"pattern,omitempty"`
-	Divisor  any    `json:"divisor,omitempty"`
-	Keys     []string `json:"keys,omitempty"`
+	Code      string   `json:"code"`
+	Message   string   `json:"message"`
+	Path      []any    `json:"path"`
+	Input     any      `json:"input,omitempty"`
+	Expected  string   `json:"expected,omitempty"`
+	Origin    string   `json:"origin,omitempty"`
+	Minimum   any      `json:"minimum,omitempty"`
+	Maximum   any      `json:"maximum,omitempty"`
+	Inclusive bool     `json:"inclusive,omitempty"`
+	Exact     bool     `json:"exact,omitempty"`
+	Format    string   `json:"format,omitempty"`
+	Pattern   string   `json:"pattern,omitempty"`
+	Divisor   any      `json:"divisor,omitempty"`
+	Keys      []string `json:"keys,omitempty"`
 }
 
 // Error is a Zod-compatible validation error (aggregate of issues).
@@ -99,13 +99,13 @@ func (e *Error) JSON() string {
 }
 
 func newIssue(code, message string, path []any, input any) Issue {
-	return Issue{Code: code, Message: message, Path: append([]any(nil), path...), Input: input}
+	return Issue{Code: code, Message: message, Path: append([]any{}, path...), Input: input}
 }
 
 func prefixPath(path []any, prefix any) []any {
 	out := make([]any, 0, len(path)+1)
-	out = append(out, prefix)
 	out = append(out, path...)
+	out = append(out, prefix)
 	return out
 }
 
@@ -164,6 +164,9 @@ func (v *Validator) ParseJSON(data []byte) (any, error) {
 }
 
 func (v *Validator) safeParse(input any, schema Schema, path []any) SafeResult {
+	if path == nil {
+		path = []any{}
+	}
 	issues, out := v.run(input, schema, path)
 	if len(issues) > 0 {
 		return SafeResult{Success: false, Error: &Error{Issues: issues}}
@@ -171,20 +174,28 @@ func (v *Validator) safeParse(input any, schema Schema, path []any) SafeResult {
 	return SafeResult{Success: true, Data: out}
 }
 
-func (v *Validator) resolveRef(schema Schema) (Schema, bool) {
-	if schema.Ref == "" {
-		return schema, false
-	}
-	if v.defs != nil {
-		if def, ok := v.defs[schema.Ref]; ok {
-			return def, true
-		}
-	}
-	return schema, false
+// Undefined represents an absent value, distinct from JSON null (nil).
+// Use it for top-level optional/default parsing; object fields use it internally.
+var Undefined = undefinedValue{}
+
+type undefinedValue struct{}
+
+func isUndefined(input any) bool {
+	_, ok := input.(undefinedValue)
+	return ok
 }
 
 func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
-	if resolved, ok := v.resolveRef(schema); ok {
+	seen := make(map[string]bool)
+	for schema.Ref != "" || schema.Type == "$ref" {
+		if schema.Ref == "" || seen[schema.Ref] {
+			return []Issue{newIssue("custom", "cyclic or empty schema reference", path, input)}, nil
+		}
+		seen[schema.Ref] = true
+		resolved, ok := v.defs[schema.Ref]
+		if !ok {
+			return []Issue{newIssue("custom", "unresolved schema reference: "+schema.Ref, path, input)}, nil
+		}
 		schema = resolved
 	}
 	switch schema.Type {
@@ -220,6 +231,22 @@ func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
 		return v.runOptional(input, schema, path)
 	case "nullable":
 		return v.runNullable(input, schema, path)
+	case "readonly":
+		if schema.Inner != nil {
+			return v.run(input, *schema.Inner, path)
+		}
+	case "nonoptional":
+		if !isUndefined(input) && schema.Inner != nil {
+			return v.run(input, *schema.Inner, path)
+		}
+		return []Issue{newIssue("invalid_type", "Required", path, input)}, nil
+	case "prefault":
+		if isUndefined(input) {
+			input = schema.Default
+		}
+		if schema.Inner != nil {
+			return v.run(input, *schema.Inner, path)
+		}
 	case "default":
 		return v.runDefault(input, schema, path)
 	case "any", "unknown":
@@ -229,4 +256,5 @@ func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
 	default:
 		return []Issue{newIssue("custom", fmt.Sprintf("unsupported schema type %q", schema.Type), path, input)}, input
 	}
+	return []Issue{newIssue("custom", "missing inner schema", path, input)}, nil
 }

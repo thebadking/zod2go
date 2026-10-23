@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { tsImport } from "tsx/esm/api";
 import { exportSchemaJSON } from "./export.js";
 
 async function main(): Promise<void> {
@@ -10,7 +11,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const mod = await import(pathToFileURL(modulePath).href);
+  const mod = await tsImport(pathToFileURL(modulePath).href, import.meta.url);
   const schema = mod[exportName];
   if (!schema || typeof schema !== "object" || !("def" in schema)) {
     console.error(`Export "${exportName}" not found or is not a Zod schema in ${modulePath}`);

@@ -3,16 +3,18 @@ package zod2go
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 func (v *Validator) runString(input any, schema Schema, path []any) ([]Issue, any) {
 	val := input
 	if schema.Coerce {
-		val = fmt.Sprint(input)
+		val = jsString(input)
 	}
 	s, ok := val.(string)
 	if !ok {
@@ -34,7 +36,7 @@ func (v *Validator) runString(input any, schema Schema, path []any) ([]Issue, an
 	}
 	if schema.Pattern != "" {
 		re, err := regexp.Compile(schema.Pattern)
-		if err == nil && !re.MatchString(s) {
+		if err != nil || !re.MatchString(s) {
 			return []Issue{{
 				Code: "invalid_format", Format: "regex", Pattern: schema.Pattern, Path: path, Input: s,
 				Message: "Invalid string: must match pattern",
@@ -54,7 +56,7 @@ func checkString(s string, chk Check, path []any) *Issue {
 	switch chk.Check {
 	case "min_length":
 		min := intFromAny(chk.Value)
-		if len([]rune(s)) < min {
+		if len(utf16.Encode([]rune(s))) < min {
 			return &Issue{
 				Code: "too_small", Origin: "string", Minimum: min, Inclusive: true, Path: path, Input: s,
 				Message: fmt.Sprintf("Too small: expected string to have >=%d characters", min),
@@ -62,7 +64,7 @@ func checkString(s string, chk Check, path []any) *Issue {
 		}
 	case "max_length":
 		max := intFromAny(chk.Value)
-		if len([]rune(s)) > max {
+		if len(utf16.Encode([]rune(s))) > max {
 			return &Issue{
 				Code: "too_big", Origin: "string", Maximum: max, Inclusive: true, Path: path, Input: s,
 				Message: fmt.Sprintf("Too big: expected string to have <=%d characters", max),
@@ -70,22 +72,23 @@ func checkString(s string, chk Check, path []any) *Issue {
 		}
 	case "length_equals":
 		n := intFromAny(chk.Value)
-		if len([]rune(s)) != n {
+		if len(utf16.Encode([]rune(s))) != n {
 			return &Issue{
 				Code: "too_small", Origin: "string", Minimum: n, Exact: true, Path: path, Input: s,
 				Message: fmt.Sprintf("Invalid length: expected %d", n),
 			}
 		}
 	case "string_format":
-		if re, ok := formatRegex(chk.Format, nil); ok && !re.MatchString(s) {
+		version := intFromAny(chk.Value)
+		if re, ok := formatRegex(chk.Format, &version); ok && !re.MatchString(s) {
 			return &Issue{
 				Code: "invalid_format", Format: chk.Format, Path: path, Input: s,
 				Message: fmt.Sprintf("Invalid %s", chk.Format),
 			}
 		}
-		if chk.Pattern != "" {
+		if _, known := formatRegex(chk.Format, nil); !known && chk.Pattern != "" {
 			re, err := regexp.Compile(chk.Pattern)
-			if err == nil && !re.MatchString(s) {
+			if err != nil || !re.MatchString(s) {
 				return &Issue{Code: "invalid_format", Format: "regex", Pattern: chk.Pattern, Path: path, Input: s}
 			}
 		}
@@ -96,19 +99,10 @@ func checkString(s string, chk Check, path []any) *Issue {
 func (v *Validator) runNumber(input any, schema Schema, path []any) ([]Issue, any) {
 	val := input
 	if schema.Coerce {
-		switch x := input.(type) {
-		case string:
-			if f, err := strconv.ParseFloat(x, 64); err == nil {
-				val = f
-			}
-		case jsonNumber:
-			if f, err := x.Float64(); err == nil {
-				val = f
-			}
-		}
+		val = jsNumber(input)
 	}
 	n, ok := toFloat64(val)
-	if !ok {
+	if !ok || math.IsNaN(n) || math.IsInf(n, 0) {
 		return []Issue{{
 			Code: "invalid_type", Expected: "number", Path: path, Input: input,
 			Message: "Invalid input: expected number, received " + typeName(input),
@@ -150,12 +144,21 @@ func checkNumber(n float64, chk Check, path []any) *Issue {
 		}
 	case "multiple_of":
 		div := floatFromAny(chk.Value)
-		if div != 0 && math.Mod(n, div) != 0 {
+		ratio := n / div
+		if div == 0 || math.Abs(ratio-math.Round(ratio)) >= (math.Nextafter(1, 2)-1)*math.Max(math.Abs(ratio), 1) {
 			return &Issue{Code: "not_multiple_of", Divisor: div, Path: path, Input: n}
 		}
 	case "number_format":
-		// Exported metadata; int typing handled at schema level.
-		return nil
+		switch chk.Format {
+		case "safeint":
+			if math.Trunc(n) != n || math.Abs(n) > 9007199254740991 {
+				return &Issue{Code: "invalid_type", Expected: "int", Path: path, Input: n}
+			}
+		case "int32":
+			if math.Trunc(n) != n || n < -2147483648 || n > 2147483647 {
+				return &Issue{Code: "invalid_type", Expected: "int", Path: path, Input: n}
+			}
+		}
 	}
 	return nil
 }
@@ -219,11 +222,11 @@ func checkDate(t time.Time, chk Check, path []any, input string) *Issue {
 		}
 		if chk.Inclusive {
 			if t.Before(ref) {
-				return &Issue{Code: "too_small", Origin: "date", Path: path, Input: input,
+				return &Issue{Code: "too_small", Origin: "date", Minimum: chk.Value, Inclusive: chk.Inclusive, Path: path, Input: input,
 					Message: "Date too early"}
 			}
 		} else if !t.After(ref) {
-			return &Issue{Code: "too_small", Origin: "date", Path: path, Input: input,
+			return &Issue{Code: "too_small", Origin: "date", Minimum: chk.Value, Inclusive: chk.Inclusive, Path: path, Input: input,
 				Message: "Date too early"}
 		}
 	case "less_than":
@@ -233,11 +236,11 @@ func checkDate(t time.Time, chk Check, path []any, input string) *Issue {
 		}
 		if chk.Inclusive {
 			if t.After(ref) {
-				return &Issue{Code: "too_big", Origin: "date", Path: path, Input: input,
+				return &Issue{Code: "too_big", Origin: "date", Maximum: chk.Value, Inclusive: chk.Inclusive, Path: path, Input: input,
 					Message: "Date too late"}
 			}
 		} else if !t.Before(ref) {
-			return &Issue{Code: "too_big", Origin: "date", Path: path, Input: input,
+			return &Issue{Code: "too_big", Origin: "date", Maximum: chk.Value, Inclusive: chk.Inclusive, Path: path, Input: input,
 				Message: "Date too late"}
 		}
 	}
@@ -249,14 +252,17 @@ func (v *Validator) runBoolean(input any, schema Schema, path []any) ([]Issue, a
 	if schema.Coerce {
 		switch x := input.(type) {
 		case string:
-			switch strings.ToLower(strings.TrimSpace(x)) {
-			case "true", "1", "yes", "on":
+			val = x != ""
+		case bool:
+			val = x
+		case nil, undefinedValue:
+			val = false
+		default:
+			if n, ok := toFloat64(input); ok {
+				val = n != 0 && !math.IsNaN(n)
+			} else {
 				val = true
-			case "false", "0", "no", "off", "":
-				val = false
 			}
-		case float64:
-			val = x != 0
 		}
 	}
 	b, ok := val.(bool)
@@ -280,13 +286,13 @@ func (v *Validator) runNull(input any, path []any) ([]Issue, any) {
 }
 
 func (v *Validator) runUndefined(input any, path []any) ([]Issue, any) {
-	if input != nil {
+	if !isUndefined(input) {
 		return []Issue{{
 			Code: "invalid_type", Expected: "undefined", Path: path, Input: input,
 			Message: "Invalid input: expected undefined",
 		}}, nil
 	}
-	return nil, nil
+	return nil, Undefined
 }
 
 func (v *Validator) runArray(input any, schema Schema, path []any) ([]Issue, any) {
@@ -354,23 +360,14 @@ func (v *Validator) runObject(input any, schema Schema, path []any) ([]Issue, an
 	for key, child := range schema.Shape {
 		val, present := obj[key]
 		if !present {
-			if child.Type == "optional" || child.Type == "default" {
-				_, parsed := v.run(nil, child, prefixPath(path, key))
-				if parsed != nil {
-					out[key] = parsed
-				}
-				continue
-			}
-			issues = append(issues, Issue{
-				Code: "invalid_type", Expected: "nonoptional", Path: prefixPath(path, key), Input: nil,
-				Message: "Required",
-			})
-			continue
+			val = Undefined
 		}
 		res := v.safeParse(val, child, prefixPath(path, key))
 		if !res.Success {
 			issues = append(issues, res.Error.Issues...)
-		} else if res.Data != nil || present {
+		} else if !present && isUndefined(res.Data) && !child.OptionalInput && child.Type != "optional" {
+			issues = append(issues, Issue{Code: "invalid_type", Expected: "nonoptional", Path: prefixPath(path, key), Message: "Required"})
+		} else if !isUndefined(res.Data) {
 			out[key] = res.Data
 		}
 	}
@@ -433,8 +430,11 @@ func (v *Validator) runUnion(input any, schema Schema, path []any) ([]Issue, any
 }
 
 func (v *Validator) runOptional(input any, schema Schema, path []any) ([]Issue, any) {
-	if input == nil {
-		return nil, nil
+	if isUndefined(input) {
+		if schema.Inner != nil && schema.Inner.Type == "default" {
+			return v.run(input, *schema.Inner, path)
+		}
+		return nil, Undefined
 	}
 	if schema.Inner == nil {
 		return nil, input
@@ -453,7 +453,7 @@ func (v *Validator) runNullable(input any, schema Schema, path []any) ([]Issue, 
 }
 
 func (v *Validator) runDefault(input any, schema Schema, path []any) ([]Issue, any) {
-	if input == nil && schema.Default != nil {
+	if isUndefined(input) {
 		return nil, schema.Default
 	}
 	if schema.Inner == nil {
@@ -509,11 +509,14 @@ func (v *Validator) runTuple(input any, schema Schema, path []any) ([]Issue, any
 			return []Issue{*iss}, nil
 		}
 	}
-	if len(schema.Items) > 0 && len(arr) < len(schema.Items) {
-		return []Issue{{
-			Code: "too_small", Origin: "array", Minimum: len(schema.Items), Inclusive: true, Path: path, Input: input,
-			Message: fmt.Sprintf("Too small: expected array to have >=%d items", len(schema.Items)),
-		}}, nil
+	if schema.Rest == nil && len(arr) > len(schema.Items) {
+		return []Issue{{Code: "too_big", Origin: "array", Maximum: len(schema.Items), Inclusive: true, Path: path}}, nil
+	}
+	for i := len(arr); i < len(schema.Items); i++ {
+		res := v.safeParse(Undefined, schema.Items[i], prefixPath(path, float64(i)))
+		if !res.Success {
+			return res.Error.Issues, nil
+		}
 	}
 	out := make([]any, len(arr))
 	var issues []Issue
@@ -555,6 +558,14 @@ func (v *Validator) runRecord(input any, schema Schema, path []any) ([]Issue, an
 	}
 	out := make(map[string]any)
 	var issues []Issue
+	if schema.Type == "record" && schema.KeyType != nil && schema.KeyType.Type == "enum" {
+		for _, key := range schema.KeyType.Values {
+			name := jsString(key)
+			if _, present := obj[name]; !present {
+				issues = append(issues, Issue{Code: "invalid_type", Expected: "nonoptional", Path: prefixPath(path, name), Message: "Required"})
+			}
+		}
+	}
 	for k, val := range obj {
 		if schema.KeyType != nil {
 			res := v.safeParse(k, *schema.KeyType, prefixPath(path, k))
@@ -588,26 +599,51 @@ func (v *Validator) runIntersection(input any, schema Schema, path []any) ([]Iss
 	if len(rightIssues) > 0 {
 		return rightIssues, nil
 	}
-	return nil, mergeOutputs(leftOut, rightOut)
+	out, ok := mergeOutputs(leftOut, rightOut)
+	if !ok {
+		return []Issue{newIssue("custom", "Intersection outputs could not be merged", path, input)}, nil
+	}
+	return nil, out
 }
 
-func mergeOutputs(a, b any) any {
+func mergeOutputs(a, b any) (any, bool) {
+	if reflect.DeepEqual(a, b) {
+		return a, true
+	}
 	am, aok := a.(map[string]any)
 	bm, bok := b.(map[string]any)
 	if aok && bok {
 		out := make(map[string]any, len(am)+len(bm))
-		for k, v := range am {
-			out[k] = v
+		for k, val := range am {
+			out[k] = val
 		}
-		for k, v := range bm {
-			out[k] = v
+		for k, val := range bm {
+			if prev, exists := out[k]; exists {
+				merged, ok := mergeOutputs(prev, val)
+				if !ok {
+					return nil, false
+				}
+				out[k] = merged
+			} else {
+				out[k] = val
+			}
 		}
-		return out
+		return out, true
 	}
-	if b != nil {
-		return b
+	aa, aok := a.([]any)
+	ba, bok := b.([]any)
+	if aok && bok && len(aa) == len(ba) {
+		out := make([]any, len(aa))
+		for i := range aa {
+			merged, ok := mergeOutputs(aa[i], ba[i])
+			if !ok {
+				return nil, false
+			}
+			out[i] = merged
+		}
+		return out, true
 	}
-	return a
+	return nil, false
 }
 
 type jsonNumber interface {
@@ -676,5 +712,61 @@ func valuesEqual(a, b any) bool {
 			return af == bf
 		}
 	}
-	return fmt.Sprint(a) == fmt.Sprint(b)
+	return reflect.DeepEqual(a, b)
+}
+
+// jsString and jsNumber implement JavaScript coercion for JSON values.
+func jsString(input any) string {
+	switch x := input.(type) {
+	case nil:
+		return "null"
+	case undefinedValue:
+		return "undefined"
+	case string:
+		return x
+	case []any:
+		parts := make([]string, len(x))
+		for i, item := range x {
+			if item != nil && !isUndefined(item) {
+				parts[i] = jsString(item)
+			}
+		}
+		return strings.Join(parts, ",")
+	case map[string]any:
+		return "[object Object]"
+	default:
+		return fmt.Sprint(input)
+	}
+}
+
+func jsNumber(input any) float64 {
+	if n, ok := toFloat64(input); ok {
+		return n
+	}
+	switch x := input.(type) {
+	case nil:
+		return 0
+	case bool:
+		if x {
+			return 1
+		}
+		return 0
+	case []any:
+		return jsNumber(jsString(x))
+	case string:
+		s := strings.TrimSpace(x)
+		if s == "" {
+			return 0
+		}
+		if len(s) > 2 && s[0] == '0' && strings.ContainsAny(s[1:2], "xXbBoO") {
+			if n, err := strconv.ParseUint(s, 0, 64); err == nil {
+				return float64(n)
+			}
+			return math.NaN()
+		}
+		if n, err := strconv.ParseFloat(s, 64); err == nil {
+			return n
+		}
+	}
+	return math.NaN()
 }

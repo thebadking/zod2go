@@ -25,6 +25,7 @@
       },
       "age": {
         "type": "optional",
+        "optionalInput": true,
         "inner": {
           "type": "int",
           "checks": [
@@ -47,6 +48,7 @@
       },
       "role": {
         "type": "default",
+        "optionalInput": true,
         "inner": {
           "type": "enum",
           "values": [
@@ -58,6 +60,7 @@
       },
       "tags": {
         "type": "optional",
+        "optionalInput": true,
         "inner": {
           "type": "array",
           "element": {

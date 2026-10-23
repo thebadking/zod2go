@@ -1,21 +1,18 @@
 # zod2go — Agent Guidelines
 
-> **Read this file first** after `.cursor/ralph/directive.md`.
-> Specs in this directory are the source of truth for deliverables.
+> Specs in this directory define the module deliverables.
 
-## Workflow (mandatory order)
+## Workflow
 
-1. Read [`.cursor/ralph/directive.md`](../.cursor/ralph/directive.md) — current task and environment.
-2. Read this file — conventions and testing rules.
-3. Open [`MASTER_IMPLEMENTATION.md`](./MASTER_IMPLEMENTATION.md) — find the next incomplete deliverable.
-4. Open the relevant numbered spec — implement only what it defines.
-5. Update `MASTER_IMPLEMENTATION.md` and directive notes each iteration.
-6. Run `npm test` before finishing an iteration.
-7. Set `complete: true` in directive frontmatter when every spec deliverable is `done`.
+1. Read this file and [`MASTER_IMPLEMENTATION.md`](./MASTER_IMPLEMENTATION.md).
+2. Inspect the current checkout, branches, and worktrees before editing.
+3. Read the relevant numbered spec and the user's current task.
+4. Keep the implementation tracker current.
+5. Run `npm test` and `npm run build` before finishing.
 
 ## Repository rules
 
-- **Worktree only:** edit files in this agent worktree (`/.cp-worktrees/agent-ipqj`), not other worktrees or the main repo unless merging.
+- **Checkout:** use the current authorized checkout. Preserve unrelated changes and consolidate branches only after verifying their contents.
 - **IR + runtime together:** TypeScript exporter (`ts/src/export.ts`) and Go validator (`validate.go`, `parse.go`) must stay in sync for every supported type.
 - **Real Zod schemas:** examples and tests use Zod v4 from `vendor/zod` / npm `zod@4.4.3`.
 - **Fixtures:** exported IR JSON lives in `testdata/`; regenerate with `npm run export:fixtures`.

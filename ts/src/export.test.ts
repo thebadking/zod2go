@@ -113,3 +113,41 @@ describe("exportSchema", () => {
     expect(doc.schema.coerce).toBe(true);
   });
 });
+
+
+describe("recursive serialization regressions", () => {
+  it("serializes an object root referenced by a lazy child", () => {
+    const root: z.ZodTypeAny = z.object({ children: z.array(z.lazy(() => root)) });
+    const doc = JSON.parse(JSON.stringify(exportSchema(root)));
+    expect(doc.schema.type).toBe("object");
+    expect(Object.keys(doc.definitions).length).toBeGreaterThan(0);
+  });
+
+  it("preserves prototype-named fields", () => {
+    const schema = z.object(Object.fromEntries([["__proto__", z.string()]]));
+    const doc = JSON.parse(JSON.stringify(exportSchema(schema)));
+    expect(doc.schema.shape.__proto__.type).toBe("string");
+  });
+
+  it("reads the installed Zod version", () => {
+    expect(exportSchema(z.string()).$zod2go.zodVersion).toBe("4.4.3");
+  });
+});
+
+
+describe("export boundaries", () => {
+  it("resolves a lazy getter once", () => {
+    let calls = 0;
+    const lazy = z.lazy(() => { calls++; return z.string().optional(); });
+    const doc = exportSchema(z.object({ a: lazy, b: lazy }));
+    expect(calls).toBe(1);
+    expect(doc.schema.shape?.a.optionalInput).toBe(true);
+  });
+  it("rejects unsupported types explicitly", () => {
+    expect(() => exportSchema(z.bigint())).toThrow("Unsupported schema type");
+    expect(() => exportSchema(z.string().catch("fallback"))).toThrow("Unsupported schema type");
+  });
+  it("preserves numeric string enum keys without reverse mappings", () => {
+    expect(exportSchema(z.enum({ "0": "zero" })).schema.values).toEqual(["zero"]);
+  });
+});

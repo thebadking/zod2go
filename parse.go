@@ -18,40 +18,41 @@ type Document struct {
 
 // Schema is the portable Zod schema intermediate representation.
 type Schema struct {
-	Type      string            `json:"type"`
-	Ref       string            `json:"$ref,omitempty"`
-	Coerce    bool              `json:"coerce,omitempty"`
-	Checks    []Check           `json:"checks,omitempty"`
-	Element   *Schema           `json:"element,omitempty"`
-	Items     []Schema          `json:"items,omitempty"`
-	Rest      *Schema           `json:"rest,omitempty"`
-	Shape     map[string]Schema `json:"shape,omitempty"`
-	KeyType   *Schema           `json:"keyType,omitempty"`
-	ValueType *Schema           `json:"valueType,omitempty"`
-	Left      *Schema           `json:"left,omitempty"`
-	Right     *Schema           `json:"right,omitempty"`
-	Options   []Schema          `json:"options,omitempty"`
-	Values    []any             `json:"values,omitempty"`
-	Value     any               `json:"value,omitempty"`
-	Inner     *Schema           `json:"inner,omitempty"`
-	Catchall  *Schema           `json:"catchall,omitempty"`
-	Default   any               `json:"default,omitempty"`
-	Format    string            `json:"format,omitempty"`
-	Pattern   string            `json:"pattern,omitempty"`
-	UUIDVer   *int              `json:"uuidVersion,omitempty"`
-	Strict    bool              `json:"strict,omitempty"`
+	Type          string            `json:"type"`
+	Ref           string            `json:"$ref,omitempty"`
+	OptionalInput bool              `json:"optionalInput,omitempty"`
+	Coerce        bool              `json:"coerce,omitempty"`
+	Checks        []Check           `json:"checks,omitempty"`
+	Element       *Schema           `json:"element,omitempty"`
+	Items         []Schema          `json:"items,omitempty"`
+	Rest          *Schema           `json:"rest,omitempty"`
+	Shape         map[string]Schema `json:"shape,omitempty"`
+	KeyType       *Schema           `json:"keyType,omitempty"`
+	ValueType     *Schema           `json:"valueType,omitempty"`
+	Left          *Schema           `json:"left,omitempty"`
+	Right         *Schema           `json:"right,omitempty"`
+	Options       []Schema          `json:"options,omitempty"`
+	Values        []any             `json:"values,omitempty"`
+	Value         any               `json:"value,omitempty"`
+	Inner         *Schema           `json:"inner,omitempty"`
+	Catchall      *Schema           `json:"catchall,omitempty"`
+	Default       any               `json:"default,omitempty"`
+	Format        string            `json:"format,omitempty"`
+	Pattern       string            `json:"pattern,omitempty"`
+	UUIDVer       *int              `json:"uuidVersion,omitempty"`
+	Strict        bool              `json:"strict,omitempty"`
 }
 
 // Check mirrors Zod v4 $ZodCheckDef entries.
 type Check struct {
-	Check     string  `json:"check"`
-	Value     any     `json:"value,omitempty"`
-	Inclusive bool    `json:"inclusive,omitempty"`
-	Format    string  `json:"format,omitempty"`
-	Pattern   string  `json:"pattern,omitempty"`
-	Minimum   any     `json:"minimum,omitempty"`
-	Maximum   any     `json:"maximum,omitempty"`
-	Exact     bool    `json:"exact,omitempty"`
+	Check     string `json:"check"`
+	Value     any    `json:"value,omitempty"`
+	Inclusive bool   `json:"inclusive,omitempty"`
+	Format    string `json:"format,omitempty"`
+	Pattern   string `json:"pattern,omitempty"`
+	Minimum   any    `json:"minimum,omitempty"`
+	Maximum   any    `json:"maximum,omitempty"`
+	Exact     bool   `json:"exact,omitempty"`
 }
 
 // LoadDocument reads a zod2go schema document from a JSON file.
@@ -69,8 +70,11 @@ func ParseDocument(data []byte) (*Document, error) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("zod2go: parse document: %w", err)
 	}
-	if doc.Zod2go.Version == 0 {
-		return nil, fmt.Errorf("zod2go: missing $zod2go.version")
+	if doc.Zod2go.Version != Version {
+		return nil, fmt.Errorf("zod2go: unsupported or missing $zod2go.version: %d", doc.Zod2go.Version)
+	}
+	if doc.Schema.Type == "" && doc.Schema.Ref == "" {
+		return nil, fmt.Errorf("zod2go: missing schema")
 	}
 	return &doc, nil
 }

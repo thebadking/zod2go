@@ -1,7 +1,7 @@
 # Master Implementation Tracker — zod2go
 
 > Update this file whenever you complete or start work on a spec section.
-> Last updated: **iteration 1 (complete)**.
+> Last updated: **iteration 3 (verification and consolidation complete)**.
 
 ## Legend
 
@@ -23,7 +23,7 @@
 | 04   | Cross-runtime parity       | `done` | [`04-cross-runtime-parity.md`](./04-cross-runtime-parity.md) |
 | 05   | Export pipeline            | `done` | [`05-export-pipeline.md`](./05-export-pipeline.md) |
 
-All defined specs fulfilled. Former "out of scope" items (transforms, refinements, lazy/recursive schemas) are now implemented — see iteration 2 changelog below.
+All defined specs fulfilled. Former "out of scope" items (transform/refinement base-schema validation and lazy/recursive schemas) are now implemented — see iteration 2 changelog below.
 
 ---
 
@@ -74,7 +74,7 @@ All defined specs fulfilled. Former "out of scope" items (transforms, refinement
 
 | Deliverable           | Status | Tests |
 | --------------------- | ------ | ----- |
-| Parity case table     | done   | `parity.test.ts` (7 cases × 2 tests) |
+| Parity case table     | done   | `parity.test.ts` (94 shared cases × 2 tests, plus 15 Go wire/pass-through cases) |
 | Go subprocess harness | done   | `parity.test.ts` |
 
 ---
@@ -95,3 +95,17 @@ All defined specs fulfilled. Former "out of scope" items (transforms, refinement
 | ---------- | ----------- | ------ |
 | 2026-08-23 | agent-ipqj  | Created specs/; implemented extended IR, strict/checks, demo, parity, export pipeline; all tests pass |
 | 2026-10-23 | sonnet-4-6  | Iteration 2: lazy/recursive schemas ($ref + definitions), date type, set/map types, skip custom checks (refinement pass-through), literal fix for Zod v4 values array, expanded parity suite (97 TS tests, 19 Go tests) |
+
+
+### Iteration 3 — Verification and consolidation (2026-10-23)
+
+- Inspected Git and managed worktrees: no outstanding worktrees, unreachable commits, or unmerged branch commits. Three legacy agent branches were already ancestors of main.
+- Verified the original baseline: 97 TypeScript tests and 19 Go tests passed. The shared parity table contained 40 cases, not the reported 44.
+- Fixed reference chains/cycles, recursive object-root export, repeated transform export, lazy getter caching, prototype-named properties, and numeric enum reverse mappings.
+- Fixed literal type equality, missing versus null handling, optional defaults, prefault/readonly/nonoptional wrappers, nested error paths, tuple excess items, enum record exhaustiveness, and recursive intersection output merging.
+- Fixed JavaScript JSON coercions, UTF-16 string lengths, safe integer checks, decimal multiples, regex source/flags, and date bound issue metadata.
+- Parity now compares successful parsed output as well as acceptance. Infrastructure failures fail the test; temporary binaries and fixtures are cleaned up.
+- Validation: 220 TypeScript tests and 25 Go tests; TypeScript build, Go vet, fixture regeneration, and demo build/smoke checks.
+- Added a runtime TypeScript loader dependency for CLI exports, verified with native Node type stripping disabled.
+- Verified the pinned submodule matches npm Zod 4.4.3.
+- Compatibility limitations remain explicit in README; exhaustive upstream fixture coverage is outside the defined specs.
