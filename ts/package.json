@@ -11,19 +11,34 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./module": {
+      "types": "./dist/module.d.ts",
+      "import": "./dist/module.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepack": "npm run build"
   },
   "dependencies": {
-    "zod": "4.4.3",
-    "tsx": "^4.19.3"
+    "esbuild": "^0.25.12",
+    "tsx": "^4.19.3",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
     "typescript": "^5.8.2",
-    "vitest": "^3.0.8"
+    "vitest": "^5.0.5"
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "!dist/*.test.js",
+    "!dist/*.test.d.ts"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

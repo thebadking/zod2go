@@ -1,7 +1,7 @@
 # Master Implementation Tracker — zod2go
 
 > Update this file whenever you complete or start work on a spec section.
-> Last updated: **iteration 3 (verification and consolidation complete)**.
+> Last updated: **iteration 4 (full upstream compatibility via native IR and original-module runtime)**.
 
 ## Legend
 
@@ -21,9 +21,10 @@
 | 02   | Strict & array checks      | `done` | [`02-strict-and-array-checks.md`](./02-strict-and-array-checks.md) |
 | 03   | Demo playground            | `done` | [`03-demo-playground.md`](./03-demo-playground.md) |
 | 04   | Cross-runtime parity       | `done` | [`04-cross-runtime-parity.md`](./04-cross-runtime-parity.md) |
+| 06   | Full upstream compatibility | `done` | [`06-full-compatibility.md`](./06-full-compatibility.md) |
 | 05   | Export pipeline            | `done` | [`05-export-pipeline.md`](./05-export-pipeline.md) |
 
-All defined specs fulfilled. Former "out of scope" items (transform/refinement base-schema validation and lazy/recursive schemas) are now implemented — see iteration 2 changelog below.
+Specs 00–05 established native IR. Spec 06 adds the original-module runtime for complete JavaScript behavior, typed transport, all inventoried feature gates, and full upstream conformance through Go. See spec 06 for the execution boundary and reproducible evidence. Earlier iteration notes below describe historical behavior.
 
 ---
 
@@ -74,7 +75,7 @@ All defined specs fulfilled. Former "out of scope" items (transform/refinement b
 
 | Deliverable           | Status | Tests |
 | --------------------- | ------ | ----- |
-| Parity case table     | done   | `parity.test.ts` (94 shared cases × 2 tests, plus 15 Go wire/pass-through cases) |
+| Parity case table     | done   | `parity.test.ts` (shared native cases and legacy JSON wire cases); full runtime coverage in spec 06 |
 | Go subprocess harness | done   | `parity.test.ts` |
 
 ---

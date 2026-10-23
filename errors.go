@@ -128,12 +128,17 @@ type SafeResult struct {
 type Validator struct {
 	schema Schema
 	defs   map[string]Schema
+	typed  bool
 }
 
 // NewValidator creates a validator from a schema document.
 func NewValidator(doc *Document) *Validator {
-	return &Validator{schema: doc.Schema, defs: doc.Definitions}
+	return &Validator{schema: doc.Schema, defs: doc.Definitions, typed: doc.Zod2go.Encoding == "tagged"}
 }
+
+// NewTypedValidator uses native Go value types corresponding to JavaScript values.
+// JSON wire compatibility remains available through NewValidator's default mode.
+func NewTypedValidator(doc *Document) *Validator { v := NewValidator(doc); v.typed = true; return v }
 
 // NewValidatorFromSchema creates a validator from a schema node.
 func NewValidatorFromSchema(schema Schema) *Validator {
@@ -157,6 +162,13 @@ func (v *Validator) SafeParse(input any) SafeResult {
 // ParseJSON validates JSON bytes.
 func (v *Validator) ParseJSON(data []byte) (any, error) {
 	var input any
+	if v.typed {
+		value, err := DecodeTaggedValue(data)
+		if err != nil {
+			return nil, err
+		}
+		return v.Parse(value)
+	}
 	if err := json.Unmarshal(data, &input); err != nil {
 		return nil, fmt.Errorf("zod2go: invalid json: %w", err)
 	}
@@ -198,11 +210,20 @@ func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
 		}
 		schema = resolved
 	}
+	for _, check := range schema.Checks {
+		if !nativeCheckSupported(schema.Type, check.Check) {
+			return []Issue{newIssue("custom", "check requires module-backed runtime: "+check.Check, path, input)}, nil
+		}
+	}
 	switch schema.Type {
+	case "runtime":
+		return []Issue{newIssue("custom", "runtime-backed schema requires NewRuntimeValidator or CLI -runtime", path, input)}, nil
 	case "string":
 		return v.runString(input, schema, path)
 	case "number", "int":
 		return v.runNumber(input, schema, path)
+	case "bigint":
+		return v.runBigInt(input, schema, path)
 	case "boolean":
 		return v.runBoolean(input, schema, path)
 	case "date":
@@ -211,12 +232,28 @@ func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
 		return v.runNull(input, path)
 	case "undefined", "void":
 		return v.runUndefined(input, path)
-	case "array", "set":
+	case "set":
+		return v.runSet(input, schema, path)
+	case "array":
 		return v.runArray(input, schema, path)
 	case "tuple":
 		return v.runTuple(input, schema, path)
-	case "record", "map":
+	case "map":
+		if v.typed {
+			return v.runTypedMap(input, schema, path)
+		}
 		return v.runRecord(input, schema, path)
+	case "record":
+		return v.runRecord(input, schema, path)
+	case "pipe":
+		if schema.Left == nil || schema.Right == nil {
+			return []Issue{newIssue("custom", "missing pipe input/output", path, input)}, nil
+		}
+		issues, parsed := v.run(input, *schema.Left, path)
+		if len(issues) > 0 {
+			return issues, nil
+		}
+		return v.run(parsed, *schema.Right, path)
 	case "intersection":
 		return v.runIntersection(input, schema, path)
 	case "object":
@@ -242,7 +279,7 @@ func (v *Validator) run(input any, schema Schema, path []any) ([]Issue, any) {
 		return []Issue{newIssue("invalid_type", "Required", path, input)}, nil
 	case "prefault":
 		if isUndefined(input) {
-			input = schema.Default
+			input = schema.defaultValue()
 		}
 		if schema.Inner != nil {
 			return v.run(input, *schema.Inner, path)

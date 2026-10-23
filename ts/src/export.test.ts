@@ -90,20 +90,15 @@ describe("exportSchema", () => {
     expect(childrenEl?.["$ref"]).toBe(defName);
   });
 
-  it("exports refinements as pass-through (skips custom checks)", () => {
-    const S = z.string().min(3).refine((s) => s.includes("@"), "must contain @");
-    const doc = exportSchema(S);
-    // Should be a string with min_length check but no custom check
-    expect(doc.schema.type).toBe("string");
-    const checks = doc.schema.checks ?? [];
-    expect(checks.some((c) => c.check === "custom")).toBe(false);
-    expect(checks.some((c) => c.check === "min_length")).toBe(true);
-  });
-
-  it("exports transforms as input schema (pipe pass-through)", () => {
-    const S = z.string().transform((s) => s.toUpperCase());
-    const doc = exportSchema(S);
-    expect(doc.schema.type).toBe("string");
+  it("requires the original module for callback semantics", () => {
+    expect(() => exportSchema(z.string().refine(s => s.includes("@")))).toThrow("exportModuleSchema");
+    expect(() => exportSchema(z.string().transform(s => s.toUpperCase()))).toThrow("exportModuleSchema");
+    expect(() => exportSchema(z.custom(() => false))).toThrow("exportModuleSchema");
+    expect(() => exportSchema(z.object({x:z.string()}).refine(()=>false))).toThrow("exportModuleSchema");
+    expect(() => exportSchema(z.object({x:z.string()}).check(z.property("x",z.string().min(2))))).toThrow("exportModuleSchema");
+    expect(() => exportSchema(z.string().trim())).toThrow("exportModuleSchema");
+    expect(() => exportSchema(z.string().min(3,{when:()=>false} as any))).toThrow("exportModuleSchema");
+    expect(() => exportSchema(z.codec(z.string(),z.string(),{decode:s=>s.toUpperCase(),encode:s=>s.toLowerCase()}))).toThrow("exportModuleSchema");
   });
 
   it("exports coerced number", () => {
@@ -144,10 +139,29 @@ describe("export boundaries", () => {
     expect(doc.schema.shape?.a.optionalInput).toBe(true);
   });
   it("rejects unsupported types explicitly", () => {
-    expect(() => exportSchema(z.bigint())).toThrow("Unsupported schema type");
+    expect(exportSchema(z.bigint().min(10n)).schema.checks?.[0].value).toBe("10");
     expect(() => exportSchema(z.string().catch("fallback"))).toThrow("Unsupported schema type");
   });
   it("preserves numeric string enum keys without reverse mappings", () => {
     expect(exportSchema(z.enum({ "0": "zero" })).schema.values).toEqual(["zero"]);
   });
+});
+
+
+it("accepts bare core schemas without classic methods",()=>{
+ const schema=new z.core.$ZodString({type:"string"});
+ expect(exportSchema(schema).schema.type).toBe("string");
+});
+
+it("preserves typed defaults without invoking function values",()=>{
+ expect(()=>exportSchema(z.any().default({[Symbol("key")]:1}),{encoding:"tagged"})).toThrow("runtime handle");
+ expect(()=>exportSchema(z.string().default("\ud800"),{encoding:"tagged"})).toThrow("runtime handle");
+ const doc=exportSchema(z.date().default(new Date("2026-01-01T00:00:00Z")),{encoding:"tagged"});
+ expect(doc.schema.defaultEncoded).toEqual(["date","2026-01-01T00:00:00.000Z"]);
+ const map=exportSchema(z.map(z.number(),z.string()).default(new Map([[1,"one"]])),{encoding:"tagged"});
+ expect(map.schema.defaultEncoded?.[0]).toBe("id");
+ let called=0;
+ const fn=()=>{called++;return 1};
+ expect(()=>exportSchema(z.any().default(()=>fn))).toThrow("exportModuleSchema");
+ expect(called).toBe(0);
 });

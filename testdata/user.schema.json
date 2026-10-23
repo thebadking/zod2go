@@ -21,11 +21,13 @@
       },
       "email": {
         "type": "string",
-        "format": "email"
+        "format": "email",
+        "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
       },
       "age": {
         "type": "optional",
         "optionalInput": true,
+        "optionalOutput": true,
         "inner": {
           "type": "int",
           "checks": [
@@ -61,17 +63,18 @@
       "tags": {
         "type": "optional",
         "optionalInput": true,
+        "optionalOutput": true,
         "inner": {
           "type": "array",
-          "element": {
-            "type": "string"
-          },
           "checks": [
             {
               "check": "min_length",
               "value": 1
             }
-          ]
+          ],
+          "element": {
+            "type": "string"
+          }
         }
       }
     }

@@ -19,6 +19,7 @@
       },
       "scores": {
         "type": "record",
+        "partialKeys": true,
         "keyType": {
           "type": "string"
         },
@@ -47,15 +48,15 @@
       },
       "tags": {
         "type": "array",
-        "element": {
-          "type": "string"
-        },
         "checks": [
           {
             "check": "min_length",
             "value": 1
           }
-        ]
+        ],
+        "element": {
+          "type": "string"
+        }
       }
     },
     "strict": true

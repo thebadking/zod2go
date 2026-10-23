@@ -1,4 +1,5 @@
-import { z } from "zod";
+import type { z } from "zod";
+import { encodeValue, type TaggedValue } from "./wire.js";
 
 /** Portable schema node matching the Go zod2go.Schema struct. */
 export interface IRSchema {
@@ -6,6 +7,8 @@ export interface IRSchema {
   $ref?: string;
   coerce?: boolean;
   optionalInput?: boolean;
+  optionalOutput?: boolean;
+  exactOptional?: boolean;
   checks?: IRCheck[];
   element?: IRSchema;
   items?: IRSchema[];
@@ -18,13 +21,24 @@ export interface IRSchema {
   options?: IRSchema[];
   values?: unknown[];
   value?: unknown;
+  valueKind?: string;
   inner?: IRSchema;
   catchall?: IRSchema;
   default?: unknown;
+  defaultEncoded?: TaggedValue;
   format?: string;
   pattern?: string;
   uuidVersion?: number;
   strict?: boolean;
+  exclusive?: boolean;
+  keyValues?: unknown[];
+  partialKeys?: boolean;
+  mode?: string;
+  alg?: string;
+  hostname?: string;
+  protocol?: string;
+  normalize?: boolean;
+  position?: number;
 }
 
 export interface IRCheck {
@@ -36,18 +50,25 @@ export interface IRCheck {
   minimum?: unknown;
   maximum?: unknown;
   exact?: boolean;
+  alg?: string;
+  hostname?: string;
+  protocol?: string;
+  normalize?: boolean;
+  position?: number;
 }
 
 export interface IRDocument {
   $zod2go: {
     version: number;
+    encoding?: "json" | "tagged";
     zodVersion: string;
   };
+  runtime?: { bundle?: string; modulePath?: string; loader?: string; coreModule?: string; exportName: string; format?: "cjs" | "esm" };
   definitions?: Record<string, IRSchema>;
   schema: IRSchema;
 }
 
-type AnySchema = z.ZodTypeAny;
+type AnySchema = z.core.$ZodType & { def?: z.core.$ZodTypeDef };
 
 interface ExportContext {
   /** Fully serialized non-lazy schemas (deduplication). */
@@ -61,10 +82,11 @@ interface ExportContext {
   active: WeakSet<object>;
   recursiveNames: WeakMap<object, string>;
   counter: number;
+  encoding?: "json" | "tagged";
 }
 
 /** Export a Zod v4 schema to the zod2go intermediate representation. */
-export function exportSchema(schema: AnySchema): IRDocument {
+export function exportSchema(schema: AnySchema,options: {encoding?: "json" | "tagged"} = {}): IRDocument {
   const ctx: ExportContext = {
     seen: new WeakMap(),
     processing: new WeakMap(),
@@ -73,6 +95,7 @@ export function exportSchema(schema: AnySchema): IRDocument {
     active: new WeakSet(),
     recursiveNames: new WeakMap(),
     counter: 0,
+    encoding: options.encoding,
   };
 
   const root = serializeSchema(schema, ctx);
@@ -80,11 +103,12 @@ export function exportSchema(schema: AnySchema): IRDocument {
   const doc: IRDocument = {
     $zod2go: {
       version: 1,
-      zodVersion: readZodVersion(),
+      zodVersion: readZodVersion(schema),
     },
     schema: root,
   };
 
+  if(options.encoding) doc.$zod2go.encoding=options.encoding;
   if (ctx.definitions.size > 0) {
     doc.definitions = Object.fromEntries(ctx.definitions);
   }
@@ -93,12 +117,12 @@ export function exportSchema(schema: AnySchema): IRDocument {
 }
 
 /** Serialize to pretty-printed JSON. */
-export function exportSchemaJSON(schema: AnySchema, space = 2): string {
-  return JSON.stringify(exportSchema(schema), null, space);
+export function exportSchemaJSON(schema: AnySchema, space = 2,options:{encoding?:"json"|"tagged"} = {}): string {
+  return JSON.stringify(exportSchema(schema,options), null, space);
 }
 
-function readZodVersion(): string {
-  const version = z.core.version;
+function readZodVersion(schema: AnySchema): string {
+  const version=schema._zod.version;
   return `${version.major}.${version.minor}.${version.patch}`;
 }
 
@@ -136,7 +160,7 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
     return ctx.seen.get(schema)!;
   }
 
-  const def = schema.def as unknown as Record<string, unknown>;
+  const def = (schema.def ?? schema._zod.def) as unknown as Record<string, unknown>;
   const type = def.type as string;
 
   // Lazy schemas get special treatment for cycle detection.
@@ -145,27 +169,44 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
   if (type === "lazy") {
     const ref = serializeLazy(schema, def, ctx);
     if (schema._zod.optin === "optional") ref.optionalInput = true;
+    if(schema._zod.optout==="optional")ref.optionalOutput=true;
     return ref;
   }
 
   const ir: IRSchema = { type };
   if (schema._zod.optin === "optional") ir.optionalInput = true;
+  if(schema._zod.optout==="optional")ir.optionalOutput=true;
+  if(schema._zod.traits.has("$ZodExactOptional"))ir.exactOptional=true;
   ctx.seen.set(schema, ir);
   ctx.active.add(schema);
 
   if (def.coerce === true) ir.coerce = true;
+  const ownChecks=serializeChecks(def.checks);
+  if(ownChecks?.length){
+    const allowed=nativeChecks[type]??[];
+    if(ownChecks.some(check=>!allowed.includes(check.check)))throw new Error(`Checks on ${type} require exportModuleSchema (--runtime in the CLI)`);
+    ir.checks=ownChecks;
+  }
 
   switch (type) {
     case "string":
-      ir.checks = serializeChecks(def.checks);
+      ir.checks = ownChecks;
       if (typeof def.format === "string") ir.format = def.format;
-      if (typeof def.pattern === "string") ir.pattern = def.pattern;
+      if (typeof def.fn==="function" && !(def.pattern instanceof RegExp)) throw new Error("JavaScript string formats require exportModuleSchema (--runtime in the CLI)");
+      if (def.pattern instanceof RegExp) ir.pattern=regexSource(def.pattern); else if(typeof def.pattern==="string") ir.pattern=def.pattern;
+      if(def.includes!==undefined)ir.value=def.includes;
+    if(def.position!==undefined)ir.position=def.position as number;
+    if(typeof def.alg==="string")ir.alg=def.alg;
+      if(def.hostname instanceof RegExp)ir.hostname=regexSource(def.hostname);
+      if(def.protocol instanceof RegExp)ir.protocol=regexSource(def.protocol);
+      if(def.normalize===true)ir.normalize=true;
       if (typeof def.version === "string" && /^v[1-8]$/.test(def.version)) ir.uuidVersion = Number(def.version.slice(1));
       break;
 
     case "number":
     case "int":
     case "boolean":
+    case "bigint":
       ir.checks = serializeChecks([...(Array.isArray(def.checks) ? def.checks : []), ...(def.check ? [schema] : [])]);
       if (type === "number" && hasIntFormat(ir.checks)) {
         ir.type = "int";
@@ -173,30 +214,35 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
       break;
 
     case "date":
-      ir.checks = serializeChecks(def.checks);
+      ir.checks = ownChecks;
       break;
 
     case "array":
       ir.element = serializeSchema(def.element as AnySchema, ctx);
-      ir.checks = serializeChecks(def.checks);
+      ir.checks = ownChecks;
       break;
 
     case "set":
       // Represent sets as arrays; uniqueness is not enforced in the IR.
       ir.type = "set";
       ir.element = serializeSchema(def.valueType as AnySchema, ctx);
-      ir.checks = serializeChecks(def.checks);
+      ir.checks = ownChecks;
       break;
 
     case "tuple": {
       const items = def.items as AnySchema[];
       ir.items = items.map((s) => serializeSchema(s, ctx));
       if (def.rest) ir.rest = serializeSchema(def.rest as AnySchema, ctx);
-      ir.checks = serializeChecks(def.checks);
+      ir.checks = ownChecks;
       break;
     }
 
     case "record":
+      if (def.keyType) {
+        const values=(def.keyType as AnySchema)._zod.values;
+        if(values) ir.keyValues=[...values].map(jsonValue); else ir.partialKeys=true;
+      }
+      if(typeof def.mode==="string") ir.mode=def.mode;
       if (def.keyType) ir.keyType = serializeSchema(def.keyType as AnySchema, ctx);
       ir.valueType = serializeSchema(def.valueType as AnySchema, ctx);
       break;
@@ -204,6 +250,7 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
     case "map":
       // JSON maps are serialized as objects; treat like record.
       ir.type = "map";
+      ir.checks=ownChecks;
       if (def.keyType) ir.keyType = serializeSchema(def.keyType as AnySchema, ctx);
       ir.valueType = serializeSchema(def.valueType as AnySchema, ctx);
       break;
@@ -220,7 +267,7 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
         ir.shape![k] = serializeSchema(v, ctx);
       }
       if (def.catchall) ir.catchall = serializeSchema(def.catchall as AnySchema, ctx);
-      if (def.catchall && (def.catchall as AnySchema).def?.type === "never") {
+      if (def.catchall && (def.catchall as AnySchema)._zod.def.type === "never") {
         ir.strict = true;
         delete ir.catchall;
       }
@@ -244,11 +291,11 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
       // Zod v4 stores literal values as an array in def.values.
       const litVals = def.values as unknown[];
       if (Array.isArray(litVals) && litVals.length === 1) {
-        ir.value = litVals[0];
+        Object.assign(ir,serializeLiteral(litVals[0]));
       } else if (Array.isArray(litVals) && litVals.length > 1) {
         // Multi-value literal: serialize as a union of literals.
         ir.type = "union";
-        ir.options = litVals.map((v) => ({ type: "literal", value: v }));
+        ir.options = litVals.map(serializeLiteral);
       } else if (def.value !== undefined) {
         ir.value = def.value;
       }
@@ -256,6 +303,7 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
     }
 
     case "union":
+      if (def.inclusive === false) ir.exclusive = true;
       ir.options = (def.options as AnySchema[]).map((s) => serializeSchema(s, ctx));
       break;
 
@@ -271,20 +319,23 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
     case "default": {
       ir.inner = serializeSchema(innerSchema(def), ctx);
       const value = def.defaultValue;
-      ir.default = jsonValue(typeof value === "function" ? (value as () => unknown)() : value);
+      if (ctx.encoding === "tagged") ir.defaultEncoded = encodeValue(value);
+      else {
+        if (typeof value === "function") throw new Error("Function defaults require exportModuleSchema (--runtime in the CLI)");
+        ir.default = jsonValue(value);
+      }
       break;
     }
 
     case "pipe":
-      // Use the input (pre-transform) schema; covers .transform() and .refine().
-      Object.assign(ir, serializeSchema(def.in as AnySchema, ctx));
+      if (typeof def.transform === "function" || typeof def.reverseTransform === "function") throw new Error("JavaScript codecs require exportModuleSchema (--runtime in the CLI)");
+      ir.left = serializeSchema(def.in as AnySchema, ctx);
+      ir.right = serializeSchema(def.out as AnySchema, ctx);
       break;
 
     case "transform":
     case "custom":
-      // Runtime-only; fall back to unknown.
-      ir.type = "unknown";
-      break;
+      throw new Error("JavaScript callbacks require exportModuleSchema (--runtime in the CLI)");
 
     case "any":
     case "unknown":
@@ -295,7 +346,7 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
       break;
 
     default:
-      throw new Error(`Unsupported schema type: ${type}`);
+      throw new Error(`Unsupported schema type: ${type}; use exportModuleSchema (--runtime in the CLI)`);
   }
 
   ctx.active.delete(schema);
@@ -303,7 +354,7 @@ function serializeSchema(schema: AnySchema, ctx: ExportContext): IRSchema {
 }
 
 function hasIntFormat(checks?: IRCheck[]): boolean {
-  return checks?.some((c) => c.check === "number_format" && (c.format === "safeint" || c.format === "int32")) ?? false;
+  return checks?.some((c) => c.check === "number_format" && (c.format === "safeint" || c.format === "int32" || c.format === "uint32")) ?? false;
 }
 
 function innerSchema(def: Record<string, unknown>): AnySchema {
@@ -317,21 +368,25 @@ function serializeChecks(checks: unknown): IRCheck[] | undefined {
     const c = chk as { _zod?: { def?: Record<string, unknown> }; def?: Record<string, unknown> };
     const def = (c._zod?.def ?? c.def) as Record<string, unknown> | undefined;
     if (!def?.check) continue;
-    // Skip custom (refinement) checks — predicate cannot be serialized.
-    if (def.check === "custom") continue;
+    if(typeof def.when==="function" && !builtinGuard(c,def))throw new Error("Custom check guards require exportModuleSchema (--runtime in the CLI)");
+    if (def.check === "custom" || def.check === "overwrite") {
+      throw new Error("JavaScript callbacks require exportModuleSchema (--runtime in the CLI)");
+    }
     const ir: IRCheck = { check: def.check as string };
-    if (def.value !== undefined) ir.value = def.value;
-    if (def.minimum !== undefined) ir.value = def.minimum;
-    if (def.maximum !== undefined) ir.value = def.maximum;
+    if (def.value !== undefined) ir.value = jsonValue(def.value);
+    if (def.length !== undefined) ir.value = def.length;
+    if (def.size !== undefined) ir.value = def.size;
+    if (def.minimum !== undefined) ir.value = jsonValue(def.minimum);
+    if (def.maximum !== undefined) ir.value = jsonValue(def.maximum);
     if (def.inclusive !== undefined) ir.inclusive = def.inclusive as boolean;
     if (def.format !== undefined) ir.format = def.format as string;
-    if (def.pattern instanceof RegExp) {
-      if (/[^imsu]/.test(def.pattern.flags)) {
-        throw new Error(`Unsupported regex flags: ${def.pattern.flags}`);
-      }
-      const flags = def.pattern.flags.replace(/u/g, "");
-      ir.pattern = (flags ? `(?${flags})` : "") + def.pattern.source;
-    } else if (def.pattern !== undefined) ir.pattern = String(def.pattern);
+    if (def.pattern instanceof RegExp) ir.pattern=regexSource(def.pattern);else if(def.pattern!==undefined)ir.pattern=String(def.pattern);
+    if(def.includes!==undefined)ir.value=def.includes;
+    if(def.position!==undefined)ir.position=def.position as number;
+    if(typeof def.alg==="string")ir.alg=def.alg;
+    if(def.hostname instanceof RegExp)ir.hostname=regexSource(def.hostname);
+    if(def.protocol instanceof RegExp)ir.protocol=regexSource(def.protocol);
+    if(def.normalize===true)ir.normalize=true;
     if (typeof def.version === "string" && /^v[1-8]$/.test(def.version)) ir.value = Number(def.version.slice(1));
     out.push(ir);
   }
@@ -342,6 +397,7 @@ export { serializeSchema };
 
 
 function jsonValue(value: unknown): unknown {
+  if (typeof value === "bigint") return value.toString();
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Set) return [...value].map(jsonValue);
   if (value instanceof Map) {
@@ -351,4 +407,46 @@ function jsonValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(jsonValue);
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, jsonValue(val)]));
   return value;
+}
+
+
+function regexSource(pattern:RegExp):string {
+ if(/[^imsu]/.test(pattern.flags))throw new Error(`Unsupported regex flags: ${pattern.flags}`);
+ const flags=pattern.flags.replace(/u/g,"");
+ return (flags?`(?${flags})`:"")+pattern.source;
+}
+
+
+function serializeLiteral(value:unknown):IRSchema{
+ if(typeof value==="bigint")return {type:"literal",value:value.toString(),valueKind:"bigint"};
+ if(value===undefined)return {type:"literal",valueKind:"undefined"};
+ if(typeof value==="number" && !Number.isFinite(value))return {type:"literal",value:String(value),valueKind:"nonfinite"};
+ return {type:"literal",value};
+}
+
+
+const nativeChecks:Record<string,string[]>={
+ string:["min_length","max_length","length_equals","string_format"],
+ number:["greater_than","less_than","multiple_of","number_format"],
+ int:["greater_than","less_than","multiple_of","number_format"],
+ bigint:["greater_than","less_than","multiple_of","bigint_format"],
+ date:["greater_than","less_than"],
+ array:["min_length","max_length","length_equals"],
+ tuple:["min_length","max_length","length_equals"],
+ set:["min_size","max_size","size_equals"],
+ map:["min_size","max_size","size_equals"],
+};
+
+
+const guardSources=new WeakMap<object,string|undefined>();
+function builtinGuard(check:{_zod?:{def?:Record<string,unknown>}},def:Record<string,unknown>):boolean{
+ const internal=check._zod as {constr?:new(def:Record<string,unknown>)=>{_zod:{def:Record<string,unknown>}}}|undefined;
+ const Constructor=internal?.constr;
+ if(!Constructor || !/^\$ZodCheck(?:MinLength|MaxLength|LengthEquals|MinSize|MaxSize|SizeEquals)$/.test(Constructor.name))return false;
+ if(!guardSources.has(Constructor)){
+  const stock=new Constructor({...def,when:undefined});
+  const when=stock._zod.def.when;
+  guardSources.set(Constructor,typeof when==="function"?Function.prototype.toString.call(when):undefined);
+ }
+ return guardSources.get(Constructor)===Function.prototype.toString.call(def.when);
 }

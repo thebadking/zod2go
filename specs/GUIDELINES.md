@@ -25,7 +25,7 @@
 | Cross-runtime parity | Zod `safeParse` vs Go `Validator.Parse` agree | Vitest `parity.test.ts` + Go tests |
 | Go runtime | Parse/coerce/error codes on fixtures | Go `zod2go_test.go`, `extended_test.go` |
 
-Skip exhaustive combinatorics; focus on representative cases per IR type.
+The current goal requires full upstream compatibility. Inventory every upstream feature and test; representative cases alone cannot establish completion.
 
 ## Code conventions
 
@@ -40,12 +40,12 @@ The host Go 1.24 install may be broken. Tests use `GOTOOLCHAIN=go1.23.6` (see `p
 
 ## Implemented (formerly out of scope)
 
-- **Transforms:** `.transform()` is a pipe; exporter uses input schema (pre-transform). ✅
-- **Refinements:** `.refine()` attaches a `custom` check; exporter skips it and validates the base schema. ✅
+- **Transforms:** original-module runtime executes callbacks. Native IR pipes validate both stages; callback export requires runtime mode.
+- **Refinements:** original-module runtime preserves predicates. Native export rejects callbacks rather than dropping checks.
 - **Lazy/recursive schemas:** exported as `$ref` nodes with a `definitions` map in the document; Go runtime resolves refs at validation time. ✅
 - **Date type:** exported as `{"type":"date"}`; Go validates ISO 8601 strings. ✅
 - **Set/Map types:** exported as `set`/`map` IR types; Go validates element/value types. ✅
 
-## Remaining out of scope
+## Full compatibility work
 
-- **Full upstream Zod test fixture port:** exhaustive combinatoric coverage against every upstream Zod test case; representative parity is in place.
+Nothing is excluded from the current goal. See `06-full-compatibility.md` and `upstream-inventory.json`. Full semantics use the original-module Node runtime; native IR is the portable subset. Do not silently drop callbacks or describe runtime-backed coverage as native Go coverage. Run `npm run verify` to check both lanes and their combined upstream case coverage.

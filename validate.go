@@ -1,8 +1,10 @@
 package zod2go
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -24,27 +26,26 @@ func (v *Validator) runString(input any, schema Schema, path []any) ([]Issue, an
 		}}, nil
 	}
 
-	if schema.Format != "" {
-		if re, ok := formatRegex(schema.Format, schema.UUIDVer); ok {
-			if !re.MatchString(s) {
-				return []Issue{{
-					Code: "invalid_format", Format: schema.Format, Path: path, Input: s,
-					Message: fmt.Sprintf("Invalid %s", schema.Format),
-				}}, nil
-			}
+	rules := stringRules{format: schema.Format, pattern: schema.Pattern, alg: schema.Alg, hostname: schema.Hostname, protocol: schema.Protocol, normalize: schema.Normalize, uuid: schema.UUIDVer}
+	if rules.format == "url" {
+		normalized, valid := validateURL(s, rules)
+		if !valid {
+			return []Issue{{Code: "invalid_format", Format: "url", Path: path, Input: s, Message: "Invalid URL"}}, nil
 		}
-	}
-	if schema.Pattern != "" {
-		re, err := regexp.Compile(schema.Pattern)
-		if err != nil || !re.MatchString(s) {
-			return []Issue{{
-				Code: "invalid_format", Format: "regex", Pattern: schema.Pattern, Path: path, Input: s,
-				Message: "Invalid string: must match pattern",
-			}}, nil
-		}
+		s = normalized
+	} else if !validateStringRules(s, rules) {
+		return []Issue{{Code: "invalid_format", Format: schema.Format, Pattern: schema.Pattern, Path: path, Input: s, Message: "Invalid string format"}}, nil
 	}
 
 	for _, chk := range schema.Checks {
+		if chk.Check == "string_format" && chk.Format == "url" {
+			normalized, valid := validateURL(s, stringRules{format: chk.Format, pattern: chk.Pattern, alg: chk.Alg, hostname: chk.Hostname, protocol: chk.Protocol, normalize: chk.Normalize})
+			if !valid {
+				return []Issue{{Code: "invalid_format", Format: "url", Path: path, Input: s}}, nil
+			}
+			s = normalized
+			continue
+		}
 		if iss := checkString(s, chk, path); iss != nil {
 			return []Issue{*iss}, nil
 		}
@@ -79,19 +80,26 @@ func checkString(s string, chk Check, path []any) *Issue {
 			}
 		}
 	case "string_format":
+		if chk.Format == "includes" {
+			units := utf16.Encode([]rune(s))
+			position := chk.Position
+			if position < 0 {
+				position = 0
+			}
+			if position > len(units) {
+				position = len(units)
+			}
+			needle, _ := chk.Value.(string)
+			if strings.Contains(string(utf16.Decode(units[position:])), needle) {
+				return nil
+			}
+			return &Issue{Code: "invalid_format", Format: "includes", Path: path, Input: s}
+		}
 		version := intFromAny(chk.Value)
-		if re, ok := formatRegex(chk.Format, &version); ok && !re.MatchString(s) {
-			return &Issue{
-				Code: "invalid_format", Format: chk.Format, Path: path, Input: s,
-				Message: fmt.Sprintf("Invalid %s", chk.Format),
-			}
+		if !validateStringRules(s, stringRules{format: chk.Format, pattern: chk.Pattern, alg: chk.Alg, uuid: &version}) {
+			return &Issue{Code: "invalid_format", Format: chk.Format, Pattern: chk.Pattern, Path: path, Input: s}
 		}
-		if _, known := formatRegex(chk.Format, nil); !known && chk.Pattern != "" {
-			re, err := regexp.Compile(chk.Pattern)
-			if err != nil || !re.MatchString(s) {
-				return &Issue{Code: "invalid_format", Format: "regex", Pattern: chk.Pattern, Path: path, Input: s}
-			}
-		}
+
 	}
 	return nil
 }
@@ -149,15 +157,37 @@ func checkNumber(n float64, chk Check, path []any) *Issue {
 			return &Issue{Code: "not_multiple_of", Divisor: div, Path: path, Input: n}
 		}
 	case "number_format":
+		min, max := -math.MaxFloat64, math.MaxFloat64
+		isInt := strings.Contains(chk.Format, "int")
+		if isInt {
+			if math.Trunc(n) != n {
+				return &Issue{Code: "invalid_type", Expected: "int", Path: path, Input: n}
+			}
+			if n < -9007199254740991 {
+				return &Issue{Code: "too_small", Origin: "int", Minimum: float64(-9007199254740991), Inclusive: true, Path: path, Input: n}
+			}
+			if n > 9007199254740991 {
+				return &Issue{Code: "too_big", Origin: "int", Maximum: float64(9007199254740991), Inclusive: true, Path: path, Input: n}
+			}
+		}
 		switch chk.Format {
 		case "safeint":
-			if math.Trunc(n) != n || math.Abs(n) > 9007199254740991 {
-				return &Issue{Code: "invalid_type", Expected: "int", Path: path, Input: n}
-			}
+			min, max = -9007199254740991, 9007199254740991
 		case "int32":
-			if math.Trunc(n) != n || n < -2147483648 || n > 2147483647 {
-				return &Issue{Code: "invalid_type", Expected: "int", Path: path, Input: n}
-			}
+			min, max = -2147483648, 2147483647
+		case "uint32":
+			min, max = 0, 4294967295
+		case "float32":
+			min, max = -math.MaxFloat32, math.MaxFloat32
+		case "float64", "":
+		default:
+			return &Issue{Code: "custom", Message: "Unknown number format: " + chk.Format, Path: path, Input: n}
+		}
+		if n < min {
+			return &Issue{Code: "too_small", Origin: "number", Minimum: min, Inclusive: true, Path: path, Input: n}
+		}
+		if n > max {
+			return &Issue{Code: "too_big", Origin: "number", Maximum: max, Inclusive: true, Path: path, Input: n}
 		}
 	}
 	return nil
@@ -165,6 +195,49 @@ func checkNumber(n float64, chk Check, path []any) *Issue {
 
 // runDate validates ISO 8601 date/datetime strings (JSON representation of JS Date).
 func (v *Validator) runDate(input any, schema Schema, path []any) ([]Issue, any) {
+	if schema.Coerce {
+		parsed, valid := coerceDate(input)
+		if !valid {
+			return []Issue{{Code: "invalid_type", Expected: "date", Path: path, Input: input, Message: "Invalid date"}}, nil
+		}
+		text := parsed.UTC().Format("2006-01-02T15:04:05.000Z")
+		for _, check := range schema.Checks {
+			if issue := checkDate(parsed, check, path, text); issue != nil {
+				return []Issue{*issue}, nil
+			}
+		}
+		if v.typed {
+			return nil, parsed
+		}
+		return nil, text
+	}
+
+	if v.typed {
+		var nativeTime time.Time
+		valid := false
+		switch value := input.(type) {
+		case time.Time:
+			nativeTime = value
+			valid = true
+		case *time.Time:
+			if value != nil {
+				nativeTime = *value
+				valid = true
+			}
+		}
+		if valid {
+			text := nativeTime.UTC().Format(time.RFC3339Nano)
+			for _, check := range schema.Checks {
+				if issue := checkDate(nativeTime, check, path, text); issue != nil {
+					return []Issue{*issue}, nil
+				}
+			}
+			return nil, nativeTime
+		}
+		if !schema.Coerce {
+			return []Issue{{Code: "invalid_type", Expected: "date", Path: path, Input: input}}, nil
+		}
+	}
 	s, ok := input.(string)
 	if !ok {
 		return []Issue{{
@@ -197,6 +270,9 @@ func (v *Validator) runDate(input any, schema Schema, path []any) ([]Issue, any)
 		if iss := checkDate(t, chk, path, s); iss != nil {
 			return []Issue{*iss}, nil
 		}
+	}
+	if v.typed {
+		return nil, t
 	}
 	return nil, s
 }
@@ -345,15 +421,15 @@ func (v *Validator) runObject(input any, schema Schema, path []any) ([]Issue, an
 		}
 		var unknown []string
 		for k := range obj {
+			if k == "__proto__" {
+				continue
+			}
 			if _, ok := allowed[k]; !ok {
 				unknown = append(unknown, k)
 			}
 		}
 		if len(unknown) > 0 {
-			return []Issue{{
-				Code: "unrecognized_keys", Keys: unknown, Path: path, Input: obj,
-				Message: "Unrecognized key(s) in object: " + strings.Join(unknown, ", "),
-			}}, nil
+			issues = append(issues, Issue{Code: "unrecognized_keys", Keys: unknown, Path: path, Input: obj, Message: "Unrecognized key(s) in object: " + strings.Join(unknown, ", ")})
 		}
 	}
 
@@ -364,16 +440,22 @@ func (v *Validator) runObject(input any, schema Schema, path []any) ([]Issue, an
 		}
 		res := v.safeParse(val, child, prefixPath(path, key))
 		if !res.Success {
+			if !present && (child.OptionalInput && child.OptionalOutput || child.Type == "optional") {
+				continue
+			}
 			issues = append(issues, res.Error.Issues...)
 		} else if !present && isUndefined(res.Data) && !child.OptionalInput && child.Type != "optional" {
 			issues = append(issues, Issue{Code: "invalid_type", Expected: "nonoptional", Path: prefixPath(path, key), Message: "Required"})
-		} else if !isUndefined(res.Data) {
+		} else if !isUndefined(res.Data) || (v.typed && present) {
 			out[key] = res.Data
 		}
 	}
 
 	if schema.Catchall != nil {
 		for k, val := range obj {
+			if k == "__proto__" {
+				continue
+			}
 			if _, defined := schema.Shape[k]; defined {
 				continue
 			}
@@ -387,7 +469,7 @@ func (v *Validator) runObject(input any, schema Schema, path []any) ([]Issue, an
 	}
 
 	if len(issues) > 0 {
-		return issues, nil
+		return issues, out
 	}
 	return nil, out
 }
@@ -405,6 +487,32 @@ func (v *Validator) runEnum(input any, schema Schema, path []any) ([]Issue, any)
 }
 
 func (v *Validator) runLiteral(input any, schema Schema, path []any) ([]Issue, any) {
+	if schema.ValueKind != "" {
+		matches := false
+		switch schema.ValueKind {
+		case "undefined":
+			matches = isUndefined(input)
+		case "bigint":
+			validType := !v.typed
+			switch input.(type) {
+			case *big.Int, big.Int:
+				validType = true
+			}
+			if validType {
+				actual, ok := parseBigInt(input, false)
+				expected, valid := parseBigInt(schema.Value, false)
+				matches = ok && valid && actual.Cmp(expected) == 0
+			}
+		case "nonfinite":
+			if number, ok := toFloat64(input); ok {
+				matches = (schema.Value == "NaN" && math.IsNaN(number)) || (schema.Value == "Infinity" && math.IsInf(number, 1)) || (schema.Value == "-Infinity" && math.IsInf(number, -1))
+			}
+		}
+		if matches {
+			return nil, input
+		}
+		return []Issue{{Code: "invalid_value", Path: path, Input: input, Message: "Invalid literal value"}}, nil
+	}
 	if valuesEqual(input, schema.Value) {
 		return nil, input
 	}
@@ -415,24 +523,37 @@ func (v *Validator) runLiteral(input any, schema Schema, path []any) ([]Issue, a
 }
 
 func (v *Validator) runUnion(input any, schema Schema, path []any) ([]Issue, any) {
-	var allIssues []Issue
+	var matches int
+	var parsed any
 	for _, opt := range schema.Options {
 		res := v.safeParse(input, opt, path)
 		if res.Success {
-			return nil, res.Data
+			if !schema.Exclusive {
+				return nil, res.Data
+			}
+			matches++
+			parsed = res.Data
 		}
-		allIssues = append(allIssues, res.Error.Issues...)
 	}
-	return []Issue{{
-		Code: "invalid_union", Path: path, Input: input,
-		Message: "Invalid input",
-	}}, nil
+	if matches == 1 {
+		return nil, parsed
+	}
+	return []Issue{{Code: "invalid_union", Path: path, Input: input, Message: "Invalid input"}}, nil
 }
 
 func (v *Validator) runOptional(input any, schema Schema, path []any) ([]Issue, any) {
+	if schema.ExactOptional {
+		if schema.Inner == nil {
+			return nil, input
+		}
+		return v.run(input, *schema.Inner, path)
+	}
 	if isUndefined(input) {
-		if schema.Inner != nil && schema.Inner.Type == "default" {
-			return v.run(input, *schema.Inner, path)
+		if schema.Inner != nil && (schema.Inner.OptionalInput || schema.Inner.Type == "default" || schema.Inner.Type == "prefault") {
+			issues, parsed := v.run(input, *schema.Inner, path)
+			if len(issues) == 0 {
+				return nil, parsed
+			}
 		}
 		return nil, Undefined
 	}
@@ -454,7 +575,7 @@ func (v *Validator) runNullable(input any, schema Schema, path []any) ([]Issue, 
 
 func (v *Validator) runDefault(input any, schema Schema, path []any) ([]Issue, any) {
 	if isUndefined(input) {
-		return nil, schema.Default
+		return nil, schema.defaultValue()
 	}
 	if schema.Inner == nil {
 		return nil, input
@@ -499,48 +620,76 @@ func intFromCheck(chk Check, preferMin bool) int {
 func (v *Validator) runTuple(input any, schema Schema, path []any) ([]Issue, any) {
 	arr, ok := input.([]any)
 	if !ok {
-		return []Issue{{
-			Code: "invalid_type", Expected: "array", Path: path, Input: input,
-			Message: "Invalid input: expected tuple (array), received " + typeName(input),
-		}}, nil
+		return []Issue{{Code: "invalid_type", Expected: "tuple", Path: path, Input: input}}, nil
 	}
-	for _, chk := range schema.Checks {
-		if iss := checkSize(len(arr), chk, "array", path); iss != nil {
-			return []Issue{*iss}, nil
+	for _, check := range schema.Checks {
+		if issue := checkSize(len(arr), check, "array", path); issue != nil {
+			return []Issue{*issue}, nil
 		}
 	}
-	if schema.Rest == nil && len(arr) > len(schema.Items) {
-		return []Issue{{Code: "too_big", Origin: "array", Maximum: len(schema.Items), Inclusive: true, Path: path}}, nil
+	optionalIn := func(item Schema) bool {
+		return item.OptionalInput || item.Type == "optional" || item.Type == "default" || item.Type == "prefault"
 	}
-	for i := len(arr); i < len(schema.Items); i++ {
-		res := v.safeParse(Undefined, schema.Items[i], prefixPath(path, float64(i)))
-		if !res.Success {
-			return res.Error.Issues, nil
+	optionalOut := func(item Schema) bool { return item.OptionalOutput || item.Type == "optional" }
+	optinStart, optoutStart := 0, 0
+	for i := len(schema.Items) - 1; i >= 0; i-- {
+		if !optionalIn(schema.Items[i]) {
+			optinStart = i + 1
+			break
 		}
 	}
-	out := make([]any, len(arr))
+	for i := len(schema.Items) - 1; i >= 0; i-- {
+		if !optionalOut(schema.Items[i]) {
+			optoutStart = i + 1
+			break
+		}
+	}
 	var issues []Issue
-	for i, item := range arr {
-		if i >= len(schema.Items) {
-			if schema.Rest != nil {
-				res := v.safeParse(item, *schema.Rest, prefixPath(path, float64(i)))
-				if !res.Success {
-					issues = append(issues, res.Error.Issues...)
-				} else {
-					out[i] = res.Data
-				}
-			}
-			continue
+	if schema.Rest == nil {
+		if len(arr) < optinStart {
+			return []Issue{{Code: "too_small", Origin: "array", Minimum: optinStart, Inclusive: true, Path: path}}, nil
 		}
-		res := v.safeParse(item, schema.Items[i], prefixPath(path, float64(i)))
-		if !res.Success {
-			issues = append(issues, res.Error.Issues...)
+		if len(arr) > len(schema.Items) {
+			issues = append(issues, Issue{Code: "too_big", Origin: "array", Maximum: len(schema.Items), Inclusive: true, Path: path})
+		}
+	}
+	length := len(schema.Items)
+	if schema.Rest != nil && len(arr) > length {
+		length = len(arr)
+	}
+	out := make([]any, length)
+	for i, itemSchema := range schema.Items {
+		var value any = Undefined
+		present := i < len(arr)
+		if present {
+			value = arr[i]
+		}
+		childIssues, parsed := v.run(value, itemSchema, prefixPath(path, float64(i)))
+		if len(childIssues) > 0 {
+			if !present && i >= optoutStart {
+				out = out[:i]
+				break
+			}
+			issues = append(issues, childIssues...)
+		}
+		out[i] = parsed
+	}
+	if schema.Rest != nil {
+		for i := len(schema.Items); i < len(arr); i++ {
+			childIssues, parsed := v.run(arr[i], *schema.Rest, prefixPath(path, float64(i)))
+			issues = append(issues, childIssues...)
+			out[i] = parsed
+		}
+	}
+	for i := len(out) - 1; i >= len(arr); i-- {
+		if i < len(schema.Items) && optionalOut(schema.Items[i]) && isUndefined(out[i]) {
+			out = out[:i]
 		} else {
-			out[i] = res.Data
+			break
 		}
 	}
 	if len(issues) > 0 {
-		return issues, nil
+		return issues, out
 	}
 	return nil, out
 }
@@ -553,26 +702,80 @@ func (v *Validator) runRecord(input any, schema Schema, path []any) ([]Issue, an
 			Message: "Invalid input: expected object, received " + typeName(input),
 		}}, nil
 	}
+	if schema.Type == "map" {
+		for _, check := range schema.Checks {
+			if issue := checkSize(len(obj), check, "map", path); issue != nil {
+				return []Issue{*issue}, nil
+			}
+		}
+	}
 	if schema.ValueType == nil {
 		return nil, obj
 	}
 	out := make(map[string]any)
 	var issues []Issue
-	if schema.Type == "record" && schema.KeyType != nil && schema.KeyType.Type == "enum" {
-		for _, key := range schema.KeyType.Values {
-			name := jsString(key)
-			if _, present := obj[name]; !present {
-				issues = append(issues, Issue{Code: "invalid_type", Expected: "nonoptional", Path: prefixPath(path, name), Message: "Required"})
+	if schema.Type == "record" && schema.KeyType != nil && !schema.PartialKeys {
+		values := schema.KeyValues
+		finite := values != nil
+		if !finite {
+			values, finite = finiteKeys(*schema.KeyType)
+		}
+		if finite {
+			allowed := make(map[string]bool, len(values))
+			for _, key := range values {
+				_, isString := key.(string)
+				_, isNumber := toFloat64(key)
+				if !isString && !isNumber {
+					continue
+				}
+				name := jsString(key)
+				allowed[name] = true
+				value, present := obj[name]
+				if !present {
+					value = Undefined
+				}
+				result := v.safeParse(value, *schema.ValueType, prefixPath(path, name))
+				if !result.Success {
+					issues = append(issues, result.Error.Issues...)
+				} else if !isUndefined(result.Data) {
+					out[name] = result.Data
+				}
 			}
+			var unknown []string
+			for key := range obj {
+				if !allowed[key] {
+					unknown = append(unknown, key)
+				}
+			}
+			if len(unknown) > 0 {
+				issues = append(issues, Issue{Code: "unrecognized_keys", Keys: unknown, Path: path})
+			}
+			if len(issues) > 0 {
+				return issues, nil
+			}
+			return nil, out
 		}
 	}
 	for k, val := range obj {
+		if k == "__proto__" {
+			continue
+		}
 		if schema.KeyType != nil {
 			res := v.safeParse(k, *schema.KeyType, prefixPath(path, k))
+			if !res.Success && schema.Type == "record" && reNumericKey.MatchString(k) {
+				if number, err := strconv.ParseFloat(k, 64); err == nil {
+					res = v.safeParse(number, *schema.KeyType, prefixPath(path, k))
+				}
+			}
 			if !res.Success {
+				if schema.Mode == "loose" {
+					out[k] = val
+					continue
+				}
 				issues = append(issues, res.Error.Issues...)
 				continue
 			}
+			k = jsString(res.Data)
 		}
 		res := v.safeParse(val, *schema.ValueType, prefixPath(path, k))
 		if !res.Success {
@@ -592,12 +795,39 @@ func (v *Validator) runIntersection(input any, schema Schema, path []any) ([]Iss
 		return nil, input
 	}
 	leftIssues, leftOut := v.run(input, *schema.Left, path)
-	if len(leftIssues) > 0 {
-		return leftIssues, nil
-	}
 	rightIssues, rightOut := v.run(input, *schema.Right, path)
-	if len(rightIssues) > 0 {
-		return rightIssues, nil
+	var issues []Issue
+	leftKeys := make(map[string]bool)
+	rightKeys := make(map[string]bool)
+	for _, issue := range leftIssues {
+		if issue.Code == "unrecognized_keys" {
+			for _, key := range issue.Keys {
+				leftKeys[key] = true
+			}
+		} else {
+			issues = append(issues, issue)
+		}
+	}
+	for _, issue := range rightIssues {
+		if issue.Code == "unrecognized_keys" {
+			for _, key := range issue.Keys {
+				rightKeys[key] = true
+			}
+		} else {
+			issues = append(issues, issue)
+		}
+	}
+	var unknown []string
+	for key := range leftKeys {
+		if rightKeys[key] {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) > 0 {
+		issues = append(issues, Issue{Code: "unrecognized_keys", Keys: unknown, Path: path})
+	}
+	if len(issues) > 0 {
+		return issues, nil
 	}
 	out, ok := mergeOutputs(leftOut, rightOut)
 	if !ok {
@@ -732,9 +962,25 @@ func jsString(input any) string {
 			}
 		}
 		return strings.Join(parts, ",")
+	case RuntimeSet:
+		return "[object Set]"
+	case RuntimeMap:
+		return "[object Map]"
+	case InvalidDate:
+		return "Invalid Date"
+	case time.Time:
+		return jsDateString(x)
+	case *time.Time:
+		if x != nil {
+			return jsDateString(*x)
+		}
+		return "null"
 	case map[string]any:
 		return "[object Object]"
 	default:
+		if n, ok := toFloat64(input); ok {
+			return jsNumberString(n)
+		}
 		return fmt.Sprint(input)
 	}
 }
@@ -744,6 +990,20 @@ func jsNumber(input any) float64 {
 		return n
 	}
 	switch x := input.(type) {
+	case *big.Int:
+		if x != nil {
+			f, _ := new(big.Float).SetInt(x).Float64()
+			return f
+		}
+	case big.Int:
+		f, _ := new(big.Float).SetInt(&x).Float64()
+		return f
+	case time.Time:
+		return float64(x.UnixMilli())
+	case *time.Time:
+		if x != nil {
+			return float64(x.UnixMilli())
+		}
 	case nil:
 		return 0
 	case bool:
@@ -754,7 +1014,7 @@ func jsNumber(input any) float64 {
 	case []any:
 		return jsNumber(jsString(x))
 	case string:
-		s := strings.TrimSpace(x)
+		s := jsTrim(x)
 		if s == "" {
 			return 0
 		}
@@ -769,4 +1029,98 @@ func jsNumber(input any) float64 {
 		}
 	}
 	return math.NaN()
+}
+
+var reNumericKey = regexp.MustCompile(`^-?\d+(?:\.\d+)?$`)
+
+func finiteKeys(schema Schema) ([]any, bool) {
+	switch schema.Type {
+	case "enum":
+		return schema.Values, true
+	case "literal":
+		return []any{schema.Value}, true
+	case "union":
+		var values []any
+		for _, option := range schema.Options {
+			keys, finite := finiteKeys(option)
+			if !finite {
+				return nil, false
+			}
+			values = append(values, keys...)
+		}
+		return values, true
+	case "readonly":
+		if schema.Inner != nil {
+			return finiteKeys(*schema.Inner)
+		}
+	}
+	return nil, false
+}
+
+func jsNumberString(number float64) string {
+	if number == 0 {
+		return "0"
+	}
+	if math.IsNaN(number) {
+		return "NaN"
+	}
+	if math.IsInf(number, 1) {
+		return "Infinity"
+	}
+	if math.IsInf(number, -1) {
+		return "-Infinity"
+	}
+	if math.Abs(number) >= 1e-6 && math.Abs(number) < 1e21 {
+		return strconv.FormatFloat(number, 'f', -1, 64)
+	}
+	result := strconv.FormatFloat(number, 'e', -1, 64)
+	result = strings.Replace(result, "e-0", "e-", 1)
+	result = strings.Replace(result, "e+0", "e+", 1)
+	return result
+}
+func jsDateString(value time.Time) string {
+	local := value.In(time.Local)
+	name, _ := local.Zone()
+	if name == "UTC" || name == "GMT" {
+		name = "Coordinated Universal Time"
+	}
+	return local.Format("Mon Jan 02 2006 15:04:05 GMT-0700") + " (" + name + ")"
+}
+
+func nativeCheckSupported(kind, check string) bool {
+	switch kind {
+	case "string":
+		return check == "min_length" || check == "max_length" || check == "length_equals" || check == "string_format"
+	case "number", "int":
+		return check == "greater_than" || check == "less_than" || check == "multiple_of" || check == "number_format"
+	case "bigint":
+		return check == "greater_than" || check == "less_than" || check == "multiple_of" || check == "bigint_format"
+	case "date":
+		return check == "greater_than" || check == "less_than"
+	case "array", "tuple":
+		return check == "min_length" || check == "max_length" || check == "length_equals"
+	case "set", "map":
+		return check == "min_size" || check == "max_size" || check == "size_equals"
+	}
+	return false
+}
+
+// Decode per parse so mutable defaults are never shared between callers.
+func (schema Schema) defaultValue() any {
+	if len(schema.DefaultEncoded) != 0 {
+		value, err := DecodeTaggedValue(schema.DefaultEncoded)
+		if err == nil {
+			return value
+		}
+	}
+	if schema.Default != nil {
+		data, err := json.Marshal(schema.Default)
+		if err == nil {
+			var value any
+			if json.Unmarshal(data, &value) == nil {
+				return value
+			}
+		}
+	}
+	return schema.Default
 }

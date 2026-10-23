@@ -1,0 +1,13 @@
+import {readFileSync,readdirSync}from'node:fs';
+import {join,relative,resolve}from'node:path';
+const root=resolve(new URL('..',import.meta.url).pathname);
+const dir=process.env.ZOD2GO_FIXTURE_REPORT_DIR??'/tmp/zod2go-native-fixture-reports';
+const manifest=JSON.parse(readFileSync(join(dir,'manifest.json'),'utf8'));
+const inventory=JSON.parse(readFileSync(join(root,'specs/upstream-inventory.json'),'utf8'));
+const reports=readdirSync(dir).filter(f=>f.endsWith('.json')&&f!=='manifest.json').map(f=>JSON.parse(readFileSync(join(dir,f),'utf8'))).filter(r=>r.runId===manifest.runId);
+const files=reports.map(r=>({file:relative(root,r.file),fixtures:r.distinctFixtures,calls:r.calls,mismatches:r.mismatches.length,unportedCalls:Object.values(r.unported).reduce((n,v)=>n+v.calls,0)})).sort((a,b)=>a.file.localeCompare(b.file));
+const covered=new Set(files.map(f=>f.file));
+const missing=inventory.upstreamTestFiles.filter(f=>!covered.has(f));
+const summary={runId:manifest.runId,files:files.length,fixtures:files.reduce((n,f)=>n+f.fixtures,0),calls:files.reduce((n,f)=>n+f.calls,0),mismatches:files.reduce((n,f)=>n+f.mismatches,0),unportedCalls:files.reduce((n,f)=>n+f.unportedCalls,0),missingFiles:missing,detail:files};
+console.log(JSON.stringify(summary,null,2));
+if(process.argv.includes('--require-complete')&&(summary.mismatches||summary.unportedCalls||missing.length))process.exitCode=1;

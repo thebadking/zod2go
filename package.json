@@ -17,11 +17,26 @@
     "test:ts": "npm run test -w @zod2go/export",
     "test:go": "PATH=\"/usr/local/go/bin:$HOME/go/bin:$PATH\" GOTOOLCHAIN=go1.23.6 go test ./...",
     "test": "npm run test:ts && npm run test:go",
-    "sync:zod": "git submodule update --remote vendor/zod"
+    "sync:zod": "git submodule update --remote vendor/zod",
+    "inventory:zod": "node scripts/inventory-zod.mjs",
+    "check:inventory": "node scripts/inventory-zod.mjs --check",
+    "test:upstream": "vitest run --config ts/vitest.upstream.config.ts",
+    "test:upstream:native": "vitest run --config ts/vitest.upstream-native.config.ts",
+    "report:upstream:native": "node scripts/summarize-native.mjs",
+    "check:upstream:coverage": "node scripts/check-upstream-coverage.mjs",
+    "generate:formats": "node scripts/generate-formats.mjs && node scripts/generate-emoji.mjs",
+    "test:upstream:runtime": "vitest run --config ts/vitest.upstream-runtime.config.ts",
+    "verify": "npm run build && npm test && npm run check:inventory && npm run test:upstream && npm run test:upstream:native && npm run test:upstream:runtime && npm run check:upstream:coverage"
   },
   "devDependencies": {
+    "@seriousme/openapi-schema-validator": "^2.11.0",
+    "@web-std/file": "^3.0.3",
+    "recheck": "^4.6.0-beta.3",
     "typescript": "^5.8.2",
-    "vite": "^6.2.0",
+    "vite": "^8.3.5",
     "zod": "4.4.3"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

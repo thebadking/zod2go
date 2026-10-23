@@ -86,3 +86,15 @@ func TestInvalidRegexFailsValidation(t *testing.T) {
 		t.Fatal("unsupported RE2 pattern must fail")
 	}
 }
+
+func TestExactOptionalTupleTail(t *testing.T) {
+	doc := mustParseInlineSchema(t, `{"$zod2go":{"version":1,"encoding":"tagged"},"schema":{"type":"tuple","items":[{"type":"string"},{"type":"optional","exactOptional":true,"optionalInput":true,"optionalOutput":true,"inner":{"type":"string"}},{"type":"optional","optionalInput":true,"optionalOutput":true,"inner":{"type":"string"}}]}}`)
+	v := zod2go.NewTypedValidator(doc)
+	result := v.SafeParse([]any{"alpha"})
+	if !result.Success || !reflect.DeepEqual(result.Data, []any{"alpha"}) {
+		t.Fatalf("optional tail not truncated: %+v", result)
+	}
+	if v.SafeParse([]any{"alpha", zod2go.Undefined}).Success {
+		t.Fatal("exact optional accepted explicit undefined")
+	}
+}

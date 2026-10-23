@@ -72,6 +72,37 @@ const cases: Case[] = [
   { name: "uuid method v4 rejects v1", schema: z.string().uuid({ version: "v4" }), input: "550e8400-e29b-11d4-a716-446655440000", success: false },
   { name: "set default wire form", schema: z.object({s:z.set(z.string()).default(new Set(["a"]))}), input: {}, success: true },
   { name: "map default wire form", schema: z.object({m:z.map(z.string(),z.number()).default(new Map([["a",1]]))}), input: {}, success: true },
+  { name: "bigint beyond float precision", schema: z.bigint(), input: 900719925474099312345n, success: true },
+  { name: "bigint lower bound", schema: z.bigint().min(900719925474099312346n), input: 900719925474099312345n, success: false },
+  { name: "bigint upper bound", schema: z.bigint().max(10n), input: 11n, success: false },
+  { name: "bigint multiple", schema: z.bigint().multipleOf(3n), input: 12n, success: true },
+  { name: "bigint nonmultiple", schema: z.bigint().multipleOf(3n), input: 13n, success: false },
+  { name: "int64 maximum", schema: z.int64(), input: 9223372036854775807n, success: true },
+  { name: "int64 overflow", schema: z.int64(), input: 9223372036854775808n, success: false },
+  { name: "uint64 negative", schema: z.uint64(), input: -1n, success: false },
+  { name: "bigint numeric coercion", schema: z.coerce.bigint(), input: 12, success: true },
+  { name: "uint32 rejects fraction", schema: z.uint32(), input: 1.5, success: false },
+  { name: "uint32 rejects negative", schema: z.uint32(), input: -1, success: false },
+  { name: "uint32 maximum", schema: z.uint32(), input: 4294967295, success: true },
+  { name: "uint32 overflow", schema: z.uint32(), input: 4294967296, success: false },
+  { name: "int32 minimum", schema: z.int32(), input: -2147483648, success: true },
+  { name: "int32 underflow", schema: z.int32(), input: -2147483649, success: false },
+  { name: "float32 overflow", schema: z.float32(), input: 1e39, success: false },
+  { name: "float32 valid", schema: z.float32(), input: 1e30, success: true },
+  { name: "pipe validates output", schema: z.string().pipe(z.string().min(3)), input: "hi", success: false },
+  { name: "pipe valid output", schema: z.string().pipe(z.string().min(3)), input: "hello", success: true },
+  { name: "pipe carries coercion", schema: z.coerce.number().pipe(z.number().min(5)), input: "8", success: true },
+  { name: "exact string length", schema:z.string().length(3),input:"abc",success:true },
+  { name: "exact string length rejects", schema:z.string().length(3),input:"abcd",success:false },
+  { name: "xor rejects multiple matches", schema:z.xor([z.string(),z.any()]),input:"abc",success:false },
+  { name: "xor accepts one match", schema:z.xor([z.string(),z.number()]),input:"abc",success:true },
+  { name: "numeric enum record keys", schema:z.record(z.enum({A:0,B:"Shark",0:"A"}),z.string()),input:{"0":"x",Shark:"y"},success:true },
+  { name: "numeric literal record keys", schema:z.record(z.literal(["a",21]),z.string()),input:{a:"x","21":"y"},success:true },
+  { name: "literal record exhaustiveness", schema:z.record(z.literal(["a","b"]),z.string()),input:{a:"x"},success:false },
+  { name: "partial record keys", schema:z.partialRecord(z.enum(["a","b"]),z.string()),input:{a:"x"},success:true },
+  { name: "numeric record key normalization", schema:z.record(z.number(),z.string()),input:{"01":"x"},success:true },
+  { name: "loose record passthrough", schema:z.looseRecord(z.string().min(2),z.number()),input:{aa:1,x:"x"},success:true },
+  { name: "tuple undefined still required", schema:z.tuple([z.string(),z.undefined()]),input:["x"],success:false },
   // ── Original 7 cases ──────────────────────────────────────────────────────
 
   {
@@ -337,17 +368,6 @@ const cases: Case[] = [
   // ── Date ─────────────────────────────────────────────────────────────────
   // Native Date/Set/Map inputs above use their documented JSON wire forms.
 
-  // ── Refinements (pass-through) ────────────────────────────────────────────
-
-  {
-    name: "refine base schema still validated",
-    schema: z.string().min(2).refine((s) => s.startsWith("A")),
-    // min(2) check applies; the refine predicate is skipped in Go (pass-through)
-    input: "x",
-    // Zod: fails min(2); Go: also fails min(2)
-    success: false,
-  },
-
   // ── Tuple with rest ───────────────────────────────────────────────────────
 
   {
@@ -406,10 +426,10 @@ function goValidate(schemaJson: string, input: unknown): { success: boolean; dat
   }
 }
 
-// ─── Special parity cases where Zod and Go diverge intentionally ─────────────
-// Refinement predicates are skipped in Go — only the base schema is validated.
-// For these we only assert Go's outcome, not Zod == Go.
+// Legacy JSON wire cases use strings for dates, arrays for sets, and objects
+// for maps. Full JavaScript inputs and callbacks are tested through the runtime.
 const goOnlyCases: { name: string; schema: z.ZodTypeAny; input: unknown; goSuccess: boolean }[] = [
+  { name:"exact set size",schema:z.set(z.string()).size(2),input:["a","b"],goSuccess:true },
   { name: "date minimum rejects earlier", schema: z.date().min(new Date("2024-01-01Z")), input: "2023-01-01T00:00:00Z", goSuccess: false },
   { name: "date minimum equality", schema: z.date().min(new Date("2024-01-01Z")), input: "2024-01-01T00:00:00Z", goSuccess: true },
   { name: "date maximum rejects later", schema: z.date().max(new Date("2024-01-01Z")), input: "2025-01-01T00:00:00Z", goSuccess: false },
@@ -418,13 +438,6 @@ const goOnlyCases: { name: string; schema: z.ZodTypeAny; input: unknown; goSucce
   { name: "map key rejected", schema: z.map(z.string().min(2), z.number()), input: { x: 1 }, goSuccess: false },
   { name: "map value rejected", schema: z.map(z.string(), z.number()), input: { x: "bad" }, goSuccess: false },
   { name: "lazy alias chain", schema: z.lazy(() => z.lazy(() => z.number())), input: 42, goSuccess: true },
-  { name: "transform shared schema preserves input", schema: (() => { const s = z.string().transform(s => s.length); return z.object({ a: s, b: s }); })(), input: { a: "x", b: "y" }, goSuccess: true },
-  {
-    name: "refine predicate skipped in Go — valid base",
-    schema: z.string().min(1).refine((s) => s === "magic"),
-    input: "anything",
-    goSuccess: true, // Go only validates string + min(1), skips the predicate
-  },
   {
     name: "date valid ISO string in Go",
     schema: z.date(),
@@ -507,6 +520,7 @@ describe("Go-only validation cases", () => {
 
 
 function jsonValue(value: unknown): unknown {
+  if (typeof value === "bigint") return value.toString();
   if (value instanceof Date) return value.toISOString();
   if (value instanceof Set) return [...value].map(jsonValue);
   if (value instanceof Map) return Object.fromEntries([...value].map(([key, val]) => [key, jsonValue(val)]));
