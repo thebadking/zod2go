@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { exportSchema, exportSchemaJSON } from "./export.js";
 
@@ -14,6 +14,22 @@ type Case = {
 };
 
 const repoRoot = resolve(import.meta.dirname, "../..");
+
+let goBin: string;
+
+beforeAll(() => {
+  const binDir = mkdtempSync(join(tmpdir(), "zod2go-bin-"));
+  goBin = join(binDir, "zod2go");
+  execFileSync(
+    "/usr/local/go/bin/go",
+    ["build", "-o", goBin, "./cmd/zod2go"],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, GOTOOLCHAIN: "go1.23.6" },
+    },
+  );
+}, 60_000);
 
 const cases: Case[] = [
   {
@@ -70,16 +86,10 @@ function goValidate(schemaJson: string, input: unknown): boolean {
   writeFileSync(schemaPath, schemaJson, "utf8");
 
   try {
-    execFileSync(
-      "/usr/local/go/bin/go",
-      ["run", "./cmd/zod2go", "-schema", schemaPath],
-      {
-        cwd: repoRoot,
-        input: JSON.stringify(input),
-        encoding: "utf8",
-        env: { ...process.env, GOTOOLCHAIN: "go1.23.6" },
-      },
-    );
+    execFileSync(goBin, ["-schema", schemaPath], {
+      input: JSON.stringify(input),
+      encoding: "utf8",
+    });
     return true;
   } catch {
     return false;
